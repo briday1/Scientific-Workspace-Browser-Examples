@@ -8,7 +8,7 @@ path = "."
 id = "qpsk-windowed"
 name = "QPSK Windowed Analysis"
 [workspaces.config]
-data_root = "./data"
+data_root = "./data/qpsk-windowed"
 
 [[workspaces]]
 use = "acoustic-events-segmented"
@@ -16,7 +16,7 @@ path = "."
 id = "acoustic-events-segmented"
 name = "Acoustic Event Review"
 [workspaces.config]
-data_root = "./data"
+data_root = "./data/acoustic-events-segmented"
 
 [[workspaces]]
 use = "multi-tone-seek"
@@ -24,7 +24,16 @@ path = "."
 id = "multi-tone-seek"
 name = "Multi-Tone Seek"
 [workspaces.config]
-data_root = "./data"
+data_root = "./data/multi-tone-seek"
+
+[[workspaces]]
+use = "lte-recording"
+path = "."
+id = "lte-recordings"
+name = "LTE Recordings"
+[workspaces.config]
+data_root = "./data/lte"
+filename = "*.sigmf-meta"
 
 [[workspaces]]
 use = "lfm-live"

@@ -13,16 +13,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MinimalExampleTests(unittest.TestCase):
-    def test_profile_loads_three_compact_and_two_lfm_workspaces(self):
+    def test_profile_loads_example_workspaces(self):
         app = create_app(config_path=ROOT / "browser.toml")
         self.assertEqual(
-            ["qpsk-windowed", "acoustic-events-segmented", "multi-tone-seek", "lfm-live", "lfm-static"],
+            [
+                "qpsk-windowed",
+                "acoustic-events-segmented",
+                "multi-tone-seek",
+                "lte-recordings",
+                "lfm-live",
+                "lfm-static",
+            ],
             [workspace["id"] for workspace in app.list_workspaces()],
         )
         expected_mode_tags = {
             "qpsk-windowed": "windowed",
             "acoustic-events-segmented": "segmented",
             "multi-tone-seek": "seek",
+            "lte-recordings": "windowed",
             "lfm-live": "live",
             "lfm-static": "static",
         }
@@ -72,6 +80,89 @@ class MinimalExampleTests(unittest.TestCase):
         self.assertEqual(["tones"], [view["name"] for view in page["rendered_views"]])
         figure = page["rendered_views"][0]["value"]
         self.assertEqual(["scatter", "heatmap"], [trace["type"] for trace in figure["data"]])
+        self.assertEqual([-80, 0], figure["layout"]["yaxis"]["range"])
+        self.assertEqual([0, 0.25], figure["layout"]["yaxis2"]["range"])
+        self.assertEqual("Buffer time (s)", figure["layout"]["yaxis2"]["title"]["text"])
+        self.assertEqual([-50_000, 50_000], figure["layout"]["xaxis2"]["range"])
+        self.assertEqual((-80, 0), (figure["data"][1]["zmin"], figure["data"][1]["zmax"]))
+
+    def test_lte_recording_renders_rf_spectrum_and_waterfall(self):
+        app = create_app(config_path=ROOT / "browser.toml")
+        items = app.list_items("lte-recordings", {})
+        self.assertEqual(2, len(items))
+        item = next(item for item in items if "downlink" in item["id"])
+        page = app.open_item("lte-recordings", item["id"])["page"]
+        self.assertEqual("windowed", page["playback"]["mode"])
+        self.assertEqual("Sliding median power (dBFS)", page["playback"]["overview_label"])
+        self.assertEqual(400, len(page["playback"]["overview_values"]))
+        self.assertEqual(["lte-spectrum"], [view["name"] for view in page["rendered_views"]])
+        figure = page["rendered_views"][0]["value"]
+        self.assertEqual(["scatter", "heatmap"], [trace["type"] for trace in figure["data"]])
+        self.assertEqual("RF frequency (MHz)", figure["layout"]["xaxis2"]["title"]["text"])
+        self.assertEqual("Recording time (ms)", figure["layout"]["yaxis2"]["title"]["text"])
+        self.assertEqual("07.2f", figure["layout"]["xaxis2"]["tickformat"])
+        self.assertEqual("07.2f", figure["layout"]["yaxis2"]["tickformat"])
+        self.assertEqual([-90.0, -20.0], figure["layout"]["yaxis"]["range"])
+        self.assertEqual(".1f", figure["layout"]["yaxis"]["tickformat"])
+        self.assertEqual((-90.0, -20.0), (figure["data"][1]["zmin"], figure["data"][1]["zmax"]))
+        self.assertEqual(".1f", figure["data"][1]["colorbar"]["tickformat"])
+        self.assertEqual("#0d0887", figure["data"][1]["colorscale"][0][1])
+        self.assertEqual(
+            "lte-spectrum:LTE_downlink_806MHz_2022-04-09_30720ksps.sigmf-meta",
+            figure["layout"]["uirevision"],
+        )
+        colormap = next(control for control in page["controls"] if control["name"] == "lte_colormap")
+        self.assertEqual("colormap", colormap["control_type"])
+        self.assertEqual(10, len(colormap["options"]))
+        self.assertEqual(10, len(colormap["option_previews"]))
+        self.assertEqual("Plasma", colormap["default"])
+        self.assertEqual("details", colormap["placement"])
+        self.assertEqual(
+            ["lte_colormap", "lte_dbfs_limits"],
+            [control["name"] for control in page["controls"] if control["group"] == "Spectrogram display"],
+        )
+        controls = {control["name"]: control for control in page["controls"]}
+        limits = controls["lte_dbfs_limits"]
+        self.assertEqual("limits", limits["control_type"])
+        self.assertEqual((-90.0, -20.0), limits["default"])
+        self.assertEqual((-120.0, 0.0, 1.0), (limits["minimum"], limits["maximum"], limits["step"]))
+        self.assertEqual(4096, controls["lte_fft_size"]["default"])
+        self.assertEqual("Hann", controls["lte_fft_window"]["default"])
+        self.assertEqual(50, controls["lte_overlap_percent"]["default"])
+        self.assertEqual(200, controls["lte_maximum_time_bins"]["default"])
+        self.assertTrue(
+            all(controls[name]["placement"] == "details" for name in (
+                "lte_fft_size",
+                "lte_fft_window",
+                "lte_overlap_percent",
+                "lte_maximum_time_bins",
+            ))
+        )
+        self.assertEqual("806 MHz", page["statistics"]["Center frequency"])
+
+        changed = app.open_item("lte-recordings", item["id"], {"lte_colormap": "Cividis"})["page"]
+        changed_scale = changed["rendered_views"][0]["value"]["data"][1]["colorscale"]
+        self.assertEqual("#00224e", changed_scale[0][1])
+
+        changed = app.open_item("lte-recordings", item["id"], {"lte_dbfs_limits": "-82,-12"})["page"]
+        changed_figure = changed["rendered_views"][0]["value"]
+        self.assertEqual([-82.0, -12.0], changed_figure["layout"]["yaxis"]["range"])
+        self.assertEqual((-82.0, -12.0), (changed_figure["data"][1]["zmin"], changed_figure["data"][1]["zmax"]))
+
+        recording = load_recording(
+            ROOT / "data/lte/downlink/LTE_downlink_806MHz_2022-04-09_30720ksps.sigmf-meta"
+        )
+        self.assertEqual("ci16_le", recording.datatype)
+        self.assertEqual((1, 16), recording.read(0, 16).shape)
+        self.assertLessEqual(float(abs(recording.read(0, 16)).max()), 1.0)
+
+    def test_lte_uplink_uses_its_own_recording(self):
+        app = create_app(config_path=ROOT / "browser.toml")
+        item = next(item for item in app.list_items("lte-recordings", {}) if "uplink" in item["id"])
+        self.assertIn("LTE_uplink_847MHz", item["id"])
+        page = app.open_item("lte-recordings", item["id"])["page"]
+        self.assertEqual("windowed", page["playback"]["mode"])
+        self.assertEqual("847 MHz", page["statistics"]["Center frequency"])
 
     def test_segmented_acoustic_workspace_displays_irregular_stored_results(self):
         app = create_app(config_path=ROOT / "browser.toml")
@@ -91,7 +182,7 @@ class MinimalExampleTests(unittest.TestCase):
         self.assertEqual("Valve actuation", selected["statistics"]["Stored event"])
 
     def test_sigmf_reader_loads_only_requested_frames(self):
-        recording = load_recording(ROOT / "data/qpsk.sigmf-meta")
+        recording = load_recording(ROOT / "data/qpsk-windowed/qpsk.sigmf-meta")
         samples = recording.read(25, 100)
         self.assertEqual((1, 100), samples.shape)
         self.assertEqual((1, 10), recording.read(recording.sample_count - 10, 100).shape)

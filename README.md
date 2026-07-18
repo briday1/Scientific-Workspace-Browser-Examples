@@ -7,6 +7,7 @@ External, file-backed examples for [Scientific Workspace Browser](https://github
 - **QPSK Windowed Analysis** — drag or resize a short interval over a received-power overview; the selected data drives a constellation tab followed by an eye-diagram tab.
 - **Acoustic Event Review** — navigate irregular markers and display waveform and spectrum products already stored in a JSON results file; the workspace performs no raw-audio processing.
 - **Multi-Tone Seek** — play or seek through a time-varying tone recording; each selected buffer is shown as an average PSD above a waterfall.
+- **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset, then drag a window over its sliding-median power overview and inspect the selected time-frequency region.
 - **LFM Live** — the calibrated four-channel LFM workflow using live-tail playback with historical seeking and buffered reads.
 - **LFM Static** — the same calibrated LFM analysis receiving the complete OTA files with no playback controls.
 
@@ -22,6 +23,16 @@ The LFM collection is much larger and stays local. Generate it with:
 ```bash
 python scripts/generate_lfm_collection.py
 ```
+
+Download the LTE downlink and uplink SigMF metadata and recordings from Daniel Estévez's
+[LTE data directory](http://nas.destevez.net/~daniel/LTE/) with:
+
+```bash
+./scripts/generate_lte_sigmf.sh
+```
+
+Pass a directory as the first argument to override the default `data` root. Each
+recording is placed in its workspace-specific subdirectory.
 
 ## Run
 

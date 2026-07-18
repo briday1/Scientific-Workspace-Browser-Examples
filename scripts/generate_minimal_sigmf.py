@@ -63,7 +63,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "data")
     args = parser.parse_args()
     write_sigmf(
-        args.output,
+        args.output / "qpsk-windowed",
         "qpsk",
         qpsk(),
         100_000.0,
@@ -71,7 +71,7 @@ def main() -> None:
         **{"examples:symbol_rate": 10_000.0, "examples:carrier_hz": 7_000.0},
     )
     write_sigmf(
-        args.output,
+        args.output / "multi-tone-seek",
         "multiple-tones",
         multiple_tones(),
         100_000.0,

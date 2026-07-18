@@ -28,7 +28,8 @@ def analyze(data: SigMFWindow, ui) -> None:
     waterfall_db = 10 * np.log10(np.maximum(power, 1e-12))
     average_db = 10 * np.log10(np.maximum(np.mean(power, axis=0), 1e-12))
     frequency = np.fft.fftshift(np.fft.fftfreq(fft_size, 1 / data.sample_rate))
-    recording_time = (data.start_sample + starts + fft_size / 2) / data.sample_rate
+    buffer_time = (starts + fft_size / 2) / data.sample_rate
+    buffer_duration = samples.size / data.sample_rate
 
     figure = make_subplots(
         rows=2,
@@ -43,13 +44,28 @@ def analyze(data: SigMFWindow, ui) -> None:
         col=1,
     )
     figure.add_trace(
-        go.Heatmap(x=frequency, y=recording_time, z=waterfall_db, colorscale="Viridis", colorbar={"title": "dBFS"}, showscale=True),
+        go.Heatmap(
+            x=frequency,
+            y=buffer_time,
+            z=waterfall_db,
+            zmin=-80,
+            zmax=0,
+            colorscale="Viridis",
+            colorbar={"title": "dBFS"},
+            showscale=True,
+        ),
         row=2,
         col=1,
     )
-    figure.update_yaxes(title_text="Average PSD (dBFS)", row=1, col=1)
-    figure.update_yaxes(title_text="Recording time (s)", row=2, col=1)
-    figure.update_xaxes(title_text="Frequency (Hz)", row=2, col=1)
+    figure.update_yaxes(title_text="Average PSD (dBFS)", range=[-80, 0], autorange=False, row=1, col=1)
+    figure.update_yaxes(title_text="Buffer time (s)", range=[0, buffer_duration], autorange=False, row=2, col=1)
+    figure.update_xaxes(
+        title_text="Frequency (Hz)",
+        range=[-data.sample_rate / 2, data.sample_rate / 2],
+        autorange=False,
+        row=2,
+        col=1,
+    )
 
     with ui.tab("PSD + waterfall"):
         ui.plot(style_figure(figure, ui, "Selected multi-tone buffer"), key="tones")

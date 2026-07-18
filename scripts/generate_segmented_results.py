@@ -61,5 +61,7 @@ def generate(path: Path) -> Path:
 
 
 if __name__ == "__main__":
-    output = generate(Path(__file__).resolve().parents[1] / "data" / "acoustic-events.json")
+    output = generate(
+        Path(__file__).resolve().parents[1] / "data" / "acoustic-events-segmented" / "acoustic-events.json"
+    )
     print(f"Wrote {output}")
