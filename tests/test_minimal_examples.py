@@ -260,11 +260,24 @@ class MinimalExampleTests(unittest.TestCase):
 
         page = app.open_item("radar-waterfall", items[0]["id"])["page"]
         self.assertEqual("windowed", page["playback"]["mode"])
+        self.assertTrue(page["annotation"]["enabled"])
+        self.assertTrue(
+            all(
+                field["plot_binding"]["view"] == "waterfall-member"
+                for field in page["annotation"]["fields"]
+                if field["plot_binding"] is not None
+            )
+        )
         self.assertEqual("Received power (dBFS)", page["playback"]["overview_label"])
         self.assertEqual("waterfall-member", page["playback"]["overview_switcher_key"])
         self.assertEqual(12, len(page["playback"]["overview_series"]))
         self.assertTrue(all(len(series) == 400 for series in page["playback"]["overview_series"]))
+        self.assertEqual(
+            (0.1,) * 8 + (1.0,) * 4,
+            page["playback"]["overview_durations_seconds"],
+        )
         self.assertEqual(12, len(page["rendered_views"]))
+        self.assertTrue(all(view["axis_navigation"] == "bounded" for view in page["rendered_views"]))
         self.assertEqual(
             [f"waterfall-member-{index}" for index in range(12)],
             [view["name"] for view in page["rendered_views"]],
@@ -282,6 +295,23 @@ class MinimalExampleTests(unittest.TestCase):
         )
         figure = page["rendered_views"][0]["value"]
         self.assertEqual(["scatter", "heatmap"], [trace["type"] for trace in figure["data"][:2]])
+        calibration_time_range = page["rendered_views"][0]["value"]["layout"]["yaxis2"]["range"]
+        ota_time_range = page["rendered_views"][8]["value"]["layout"]["yaxis2"]["range"]
+        self.assertAlmostEqual(20.0, calibration_time_range[1] - calibration_time_range[0])
+        self.assertAlmostEqual(20.0, ota_time_range[1] - ota_time_range[0])
+        calibration_dbfs_range = page["rendered_views"][0]["value"]["layout"]["yaxis"]["range"]
+        noise_dbfs_range = page["rendered_views"][4]["value"]["layout"]["yaxis"]["range"]
+        self.assertNotEqual(calibration_dbfs_range, noise_dbfs_range)
+
+        wide = app.open_item(
+            "radar-waterfall",
+            items[0]["id"],
+            {"__window_start_seconds": "0", "__window_end_seconds": "0.5"},
+        )["page"]
+        wide_calibration_range = wide["rendered_views"][0]["value"]["layout"]["yaxis2"]["range"]
+        wide_ota_range = wide["rendered_views"][8]["value"]["layout"]["yaxis2"]["range"]
+        self.assertAlmostEqual(100.0, wide_calibration_range[1] - wide_calibration_range[0])
+        self.assertAlmostEqual(500.0, wide_ota_range[1] - wide_ota_range[0])
 
     def test_single_recording_waterfall_does_not_show_member_switcher(self):
         with TemporaryDirectory() as directory:

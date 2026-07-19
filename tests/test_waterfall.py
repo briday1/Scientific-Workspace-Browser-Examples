@@ -16,15 +16,16 @@ from scripts.generate_minimal_sigmf import write_sigmf
 
 class WaterfallTests(unittest.TestCase):
     def test_waterfall_rows_cover_the_entire_selected_buffer(self):
-        waterfall, average, centers = _waterfall_spectrogram(
+        waterfall, average, edges = _waterfall_spectrogram(
             np.ones(1_000, dtype=np.complex64),
             fft_size=10,
             maximum_rows=30,
         )
         self.assertEqual((30, 10), waterfall.shape)
         self.assertEqual((10,), average.shape)
-        self.assertEqual(5.0, centers[0])
-        self.assertEqual(995.0, centers[-1])
+        self.assertEqual((31,), edges.shape)
+        self.assertEqual(0.0, edges[0])
+        self.assertEqual(1_000.0, edges[-1])
 
     def test_windowed_waterfall_workspace_reads_sigmf_and_renders_spectrogram(self):
         with TemporaryDirectory() as directory:
@@ -65,6 +66,8 @@ class WaterfallTests(unittest.TestCase):
             controls = {control.name: control for control in opened.page.controls}
             self.assertEqual("colormap", controls["waterfall_colormap"].control_type)
             self.assertEqual("limits", controls["waterfall_dbfs_limits"].control_type)
+            self.assertEqual("toggle", controls["waterfall_auto_dbfs_scale"].control_type)
+            self.assertTrue(controls["waterfall_auto_dbfs_scale"].default)
             self.assertEqual("toggle", controls["waterfall_show_annotations"].control_type)
             self.assertTrue(controls["waterfall_show_annotations"].default)
             self.assertEqual("Annotation display", controls["waterfall_annotation_region_color"].group)
@@ -75,21 +78,24 @@ class WaterfallTests(unittest.TestCase):
 
             figure = opened.page.views[0].callback({
                 "waterfall_colormap": "Cividis",
+                "waterfall_auto_dbfs_scale": "false",
                 "waterfall_dbfs_limits": "-95,-15",
                 "waterfall_fft_size": "1024",
                 "waterfall_maximum_time_bins": "50",
             })
             self.assertEqual(["scatter", "heatmap", "scatter", "scatter"], [trace.type for trace in figure.data])
             self.assertEqual((-95.0, -15.0), (figure.data[1].zmin, figure.data[1].zmax))
+            self.assertEqual(figure.data[1].z.shape[0] + 1, len(figure.data[1].y))
+            self.assertEqual(tuple(figure.layout.yaxis2.range), (figure.data[1].y[0], figure.data[1].y[-1]))
             self.assertEqual("#00224e", figure.data[1].colorscale[0][1])
             self.assertEqual("RF frequency (MHz)", figure.layout.xaxis2.title.text)
             self.assertEqual("Recording time (ms)", figure.layout.yaxis2.title.text)
             for axis in (figure.layout.xaxis, figure.layout.xaxis2, figure.layout.yaxis, figure.layout.yaxis2):
                 self.assertIsNot(axis.fixedrange, True)
-                self.assertEqual(float(axis.range[0]), float(axis.minallowed))
-                self.assertEqual(float(axis.range[1]), float(axis.maxallowed))
-                self.assertEqual(float(axis.range[0]), float(axis.autorangeoptions.clipmin))
-                self.assertEqual(float(axis.range[1]), float(axis.autorangeoptions.clipmax))
+                self.assertIsNotNone(axis.uirevision)
+                self.assertIsNone(axis.minallowed)
+                self.assertIsNone(axis.maxallowed)
+            self.assertEqual("bounded", opened.page.views[0].axis_navigation)
             region = figure.data[2]
             self.assertFalse(region.showlegend)
             self.assertEqual("skip", region.hoverinfo)
@@ -119,6 +125,15 @@ class WaterfallTests(unittest.TestCase):
             self.assertFalse(hidden.layout.shapes)
             self.assertEqual(figure.layout.yaxis2.range, hidden.layout.yaxis2.range)
             self.assertNotEqual(figure.layout.uirevision, hidden.layout.uirevision)
+
+            moved = opened.page.views[0].callback({
+                "__window_start_seconds": "0.1",
+                "__window_end_seconds": "0.2",
+                "waterfall_fft_size": "1024",
+                "waterfall_maximum_time_bins": "50",
+            })
+            self.assertNotEqual(figure.layout.yaxis2.uirevision, moved.layout.yaxis2.uirevision)
+            self.assertEqual((100.0, 200.0), tuple(moved.layout.yaxis2.range))
 
     def test_lte_workspace_uses_the_shared_sigmf_annotation_regions(self):
         with TemporaryDirectory() as directory:
@@ -152,11 +167,92 @@ class WaterfallTests(unittest.TestCase):
             self.assertEqual((created,), tuple(opened.page.annotation.discover_callback()))
             figure = opened.page.views[0].callback({})
             self.assertEqual(["scatter", "heatmap", "scatter", "scatter"], [trace.type for trace in figure.data])
+            self.assertEqual(figure.data[1].z.shape[0] + 1, figure.data[1].y.size)
+            self.assertEqual(tuple(figure.layout.yaxis2.range), (figure.data[1].y[0], figure.data[1].y[-1]))
             self.assertIn("LTE allocation", figure.data[-1].text[0])
             fields = {field.name: field for field in opened.page.annotation.fields}
             self.assertEqual("lte-spectrum", fields["start_seconds"].plot_binding.view)
             self.assertEqual("yaxis2", fields["start_seconds"].plot_binding.axis)
             self.assertEqual("xaxis2", fields["frequency_lower_hz"].plot_binding.axis)
+
+    def test_collection_waterfall_annotates_the_selected_member(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = np.exp(1j * 2 * np.pi * 5_000 * np.arange(2_000) / 100_000).astype(np.complex64)
+            write_sigmf(root, "first", samples, 100_000.0, "First member")
+            write_sigmf(root, "second", samples, 100_000.0, "Second member")
+            collection_path = root / "members.sigmf-collection"
+            collection_path.write_text(json.dumps({
+                "collection": {"name": "Two recordings"},
+                "members": [
+                    {"role": "calibration", "channel": 1, "metadata": "first.sigmf-meta"},
+                    {"role": "ota", "channel": 1, "metadata": "second.sigmf-meta"},
+                ],
+            }), encoding="utf-8")
+
+            workspace = create_workspace({
+                "data_root": root,
+                "source_type": "collection",
+                "filename": "*.sigmf-collection",
+            })
+            opened = workspace.open_item("members")
+            self.assertIsNotNone(opened.page.annotation)
+            fields = {field.name: field for field in opened.page.annotation.fields}
+            self.assertEqual("waterfall-member", fields["start_seconds"].plot_binding.view)
+            created = opened.page.annotation.annotate_callback(
+                {"__view_selection_waterfall-member": 1},
+                AnnotationRequest(
+                    0.0,
+                    values={
+                        "start_seconds": "0.001",
+                        "stop_seconds": "0.003",
+                        "frequency_lower_hz": "-10000",
+                        "frequency_upper_hz": "10000",
+                        "comment": "Selected member only",
+                    },
+                    view_selections={"waterfall-member": 1},
+                ),
+            )
+            self.assertEqual("Selected member only", created.comment)
+            first = json.loads((root / "first.sigmf-meta").read_text(encoding="utf-8"))
+            second = json.loads((root / "second.sigmf-meta").read_text(encoding="utf-8"))
+            self.assertEqual([], first["annotations"])
+            self.assertEqual(1, len(second["annotations"]))
+            discovered = tuple(opened.page.annotation.discover_callback())
+            self.assertEqual(1, len(discovered))
+            self.assertIn("OTA · Channel 1", discovered[0].label)
+            self.assertEqual({"waterfall-member": 1}, discovered[0].view_selections)
+
+    def test_collection_members_keep_their_own_duration_and_window_bounds(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_sigmf(root, "short", np.ones(100, dtype=np.complex64), 1_000.0, "Short")
+            write_sigmf(root, "long", np.ones(1_000, dtype=np.complex64), 1_000.0, "Long")
+            (root / "members.sigmf-collection").write_text(json.dumps({
+                "collection": {"name": "Different lengths"},
+                "members": [
+                    {"role": "calibration", "channel": 1, "metadata": "short.sigmf-meta"},
+                    {"role": "ota", "channel": 1, "metadata": "long.sigmf-meta"},
+                ],
+            }), encoding="utf-8")
+
+            workspace = create_workspace({
+                "data_root": root,
+                "source_type": "collection",
+                "filename": "*.sigmf-collection",
+            })
+            values = {
+                "__window_start_seconds": "0.095",
+                "__window_end_seconds": "0.12",
+                "waterfall_fft_size": "1024",
+            }
+            opened = workspace.open_item_with_values("members", values)
+            self.assertEqual((0.1, 1.0), opened.page.playback.overview_durations_seconds)
+            short_figure, long_figure = (view.callback(values) for view in opened.page.views)
+            self.assertEqual((75.0, 100.0), tuple(short_figure.layout.yaxis2.range))
+            self.assertEqual((95.0, 120.0), tuple(long_figure.layout.yaxis2.range))
+            self.assertEqual(2, len(short_figure.data[1].y))
+            self.assertEqual(2, len(long_figure.data[1].y))
 
     def test_download_helpers_verify_and_safely_unpack_tar_archive(self):
         with TemporaryDirectory() as directory:

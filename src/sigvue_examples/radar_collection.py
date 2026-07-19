@@ -644,6 +644,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
             },
             key="waterfall-domain",
             selector="buttons",
+            axis_navigation="bounded",
         )
     with ui.tab("Time Domain"):
         ui.view_switcher(
@@ -1113,25 +1114,19 @@ def _waterfall_figure(
         title_text="Relative slow time (s)",
         range=[slow_time_start, slow_time_stop],
         autorange=False,
-        minallowed=slow_time_start,
-        maxallowed=slow_time_stop,
-        autorangeoptions={"clipmin": slow_time_start, "clipmax": slow_time_stop},
+        uirevision=f"radar-waterfall-time:{slow_time_start:.12g}:{slow_time_stop:.12g}",
         col=1,
     )
     figure.update_yaxes(
         range=[slow_time_start, slow_time_stop],
         autorange=False,
-        minallowed=slow_time_start,
-        maxallowed=slow_time_stop,
-        autorangeoptions={"clipmin": slow_time_start, "clipmax": slow_time_stop},
+        uirevision=f"radar-waterfall-time:{slow_time_start:.12g}:{slow_time_stop:.12g}",
         col=2,
     )
     figure.update_xaxes(
         range=[x_start, x_stop],
         autorange=False,
-        minallowed=x_start,
-        maxallowed=x_stop,
-        autorangeoptions={"clipmin": x_start, "clipmax": x_stop},
+        uirevision=f"radar-waterfall-{domain}:{x_start:.12g}:{x_stop:.12g}",
     )
     figure.update_xaxes(title_text="Fast time (us)" if domain == "time" else "Frequency (Hz)", row=2)
     return style_plotly(
