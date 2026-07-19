@@ -13,7 +13,22 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.io import savemat
 
-from sigvue.plugin import Annotation, AnnotationRequest, AnalysisContext, AnalysisWorkspace, DataAnnotator, DataDelivery, DataExporter, DataResource, DirectorySource, ExportRequest, PlaybackMode, TraceStyle
+from sigvue.plugin import (
+    Annotation,
+    AnnotationRequest,
+    AnalysisWorkspace,
+    DataAnnotator,
+    DataDelivery,
+    DataExporter,
+    DataResource,
+    DeliveryContext,
+    DirectorySource,
+    ExportRequest,
+    ParameterContext,
+    PlaybackMode,
+    TraceStyle,
+    ViewContext,
+)
 
 from .capabilities import (
     FORMATS,
@@ -218,7 +233,7 @@ class BufferedDelivery(DataDelivery[LfmCollection, LfmInput]):
             raise ValueError("Buffered playback mode must be 'seek' or 'live'")
         self.playback_mode = playback_mode
 
-    def prepare(self, collection: LfmCollection, ui: AnalysisContext) -> LfmInput:
+    def prepare(self, collection: LfmCollection, ui: DeliveryContext) -> LfmInput:
         default_pri = 1 / collection.ota_prf_hz
         buffer_seconds = ui.number("buffer_seconds", default=0.02, minimum=default_pri, maximum=0.1, step=default_pri)
         processing_prf_hz = ui.number(
@@ -252,7 +267,7 @@ class WholeFileDelivery(DataDelivery[LfmCollection, LfmInput]):
     def __init__(self, *, default_processing_prf_hz: float | None = None) -> None:
         self.default_processing_prf_hz = default_processing_prf_hz
 
-    def prepare(self, collection: LfmCollection, ui: AnalysisContext) -> LfmInput:
+    def prepare(self, collection: LfmCollection, ui: DeliveryContext) -> LfmInput:
         ui.playback(mode="static")
         default_prf_hz = self.default_processing_prf_hz or collection.ota_prf_hz
         processing_prf_hz = ui.number(
@@ -267,7 +282,7 @@ class WholeFileDelivery(DataDelivery[LfmCollection, LfmInput]):
         return _input(collection, start=0, count=collection.sample_count("ota"), pri=pri, ui=ui)
 
 
-def _input(collection: LfmCollection, *, start: int, count: int, pri: int, ui: AnalysisContext) -> LfmInput:
+def _input(collection: LfmCollection, *, start: int, count: int, pri: int, ui: DeliveryContext) -> LfmInput:
     calibration = ui.once("lfm-calibration-counts", lambda: collection.read("calibration"))
     noise = ui.once("lfm-noise-counts", lambda: collection.read("terminated-noise"))
     annotation_path = collection.members["ota"][0].metadata_path
@@ -309,7 +324,9 @@ def create_lfm_workspace(
         delivery=delivery,
         annotator=LfmAnnotator(),
         exporter=LfmExporter(),
-        analyze=analyze_lfm,
+        configure=configure_lfm,
+        process=process_lfm,
+        present=present_lfm,
         category="signal analysis",
         tags=tags,
         discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
@@ -420,20 +437,140 @@ class Products:
     psd_waterfall_dbm_hz: np.ndarray
 
 
-def analyze_lfm(data: LfmInput, ui: AnalysisContext) -> None:
-    try:
-        requested_adc_bits = int(ui.values.get("adc_bits", data.adc_bits))
-    except (TypeError, ValueError):
-        requested_adc_bits = data.adc_bits
-    requested_adc_bits = min(32, max(2, requested_adc_bits))
-    phase_reference = str(ui.values.get("phase_reference", "Channel 1"))
-    amplitude_reference = str(ui.values.get("amplitude_reference", "Min"))
-    calibration = _calibrate(
-        data,
-        adc_bits=requested_adc_bits,
+@dataclass(frozen=True)
+class LfmSettings:
+    adc_bits: int
+    phase_reference: str
+    amplitude_reference: str
+    reference_noise_psd_dbm_hz: float
+
+
+@dataclass(frozen=True)
+class LfmAnalysisProducts:
+    data: LfmInput
+    settings: LfmSettings
+    calibration: Calibration
+    signal: Products
+    calibrated_tone: np.ndarray
+    calibrated_noise: np.ndarray
+    phase_rows: list[dict[str, object]]
+    amplitude_rows: list[dict[str, object]]
+    amplitude_summary: str
+    noise_rows: list[dict[str, object]]
+
+
+def configure_lfm(data: LfmInput, ui: ParameterContext) -> LfmSettings:
+    phase_reference = str(
+        ui.select(
+            "phase_reference",
+            label="Phase reference",
+            default="Channel 1",
+            options=("Channel 1", "Channel 2", "Channel 3", "Channel 4"),
+            group="Calibration parameters",
+        )
+    )
+    amplitude_reference = str(
+        ui.select(
+            "amplitude_reference",
+            label="Amplitude reference",
+            default="Min",
+            options=("Channel 1", "Channel 2", "Channel 3", "Channel 4", "Min"),
+            group="Calibration parameters",
+        )
+    )
+    adc_bits = int(
+        ui.number(
+            "adc_bits",
+            label="Number of ADC bits",
+            default=data.adc_bits,
+            minimum=2,
+            maximum=32,
+            step=1,
+            group="Calibration parameters",
+        )
+    )
+    reference_noise_psd_dbm_hz = float(
+        ui.number(
+            "reference_noise_psd_dbm_hz",
+            label="Reference noise PSD (dBm/Hz)",
+            default=THERMAL_NOISE_DBM_HZ,
+            minimum=-220.0,
+            maximum=-100.0,
+            step=0.1,
+            group="Calibration parameters",
+        )
+    )
+    return LfmSettings(
+        adc_bits=adc_bits,
         phase_reference=phase_reference,
         amplitude_reference=amplitude_reference,
+        reference_noise_psd_dbm_hz=reference_noise_psd_dbm_hz,
     )
+
+
+def process_lfm(data: LfmInput, settings: LfmSettings) -> LfmAnalysisProducts:
+    calibration = _calibrate(
+        data,
+        adc_bits=settings.adc_bits,
+        phase_reference=settings.phase_reference,
+        amplitude_reference=settings.amplitude_reference,
+    )
+    ota = _apply_calibration(data.ota_counts, calibration)
+    calibrated_tone = _apply_calibration(data.calibration_counts, calibration)
+    calibrated_noise = data.noise_counts * calibration.volts_per_count[:, None]
+    signal = _products(ota, data.sample_rate, data.pri_samples, data.start_sample)
+    phase_rows = [
+        {
+            "Channel": channel + 1,
+            "Reference": "Yes" if channel == calibration.phase_reference_channel else "",
+            "Phase correction": f"{-calibration.phase_offsets[channel] * 180 / pi:+.2f} deg",
+        }
+        for channel in range(4)
+    ]
+    amplitude_rows = [
+        {
+            "Channel": channel + 1,
+            "Normalization": f"{calibration.amplitude_corrections[channel]:.4f}x",
+            "Recorded full-scale power": f"{calibration.full_scale_dbm[channel]:.2f} dBm",
+        }
+        for channel in range(4)
+    ]
+    calibrated_full_scale_voltage = (2 ** (settings.adc_bits - 1) - 1) * calibration.reference_volts_per_count
+    calibrated_full_scale_dbm = float(_db10((calibrated_full_scale_voltage**2 / (2 * R_OHMS)) / 1e-3))
+    amplitude_summary = (
+        f"Normalized to: **{calibration.amplitude_reference_label}**\n"
+        f"Calibrated scale: **{calibration.reference_volts_per_count:.4g} V/count**\n"
+        f"Calibrated full scale: **{calibrated_full_scale_dbm:.2f} dBm**"
+    )
+    noise_rows = [
+        {
+            "Channel": channel + 1,
+            "Noise power": f"{calibration.noise_power_dbm[channel]:.2f} dBm",
+            "Noise PSD": f"{calibration.noise_psd_dbm_hz[channel]:.2f} dBm/Hz",
+            "Estimated NF": (
+                f"{calibration.noise_psd_dbm_hz[channel] - settings.reference_noise_psd_dbm_hz:.2f} dB"
+            ),
+        }
+        for channel in range(4)
+    ]
+    return LfmAnalysisProducts(
+        data=data,
+        settings=settings,
+        calibration=calibration,
+        signal=signal,
+        calibrated_tone=calibrated_tone,
+        calibrated_noise=calibrated_noise,
+        phase_rows=phase_rows,
+        amplitude_rows=amplitude_rows,
+        amplitude_summary=amplitude_summary,
+        noise_rows=noise_rows,
+    )
+
+
+def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
+    data = results.data
+    calibration = results.calibration
+    products = results.signal
     trace_styles = {
         "mean": ui.trace_style("mean_trace", label="Mean / average", color=TEAL, width=1.5),
         "max": ui.trace_style("max_trace", label="Max hold", color=ORANGE, width=1.5),
@@ -452,10 +589,6 @@ def analyze_lfm(data: LfmInput, ui: AnalysisContext) -> None:
         line_style="solid",
         group="Annotation display",
     )
-    ota = _apply_calibration(data.ota_counts, calibration)
-    calibrated_tone = _apply_calibration(data.calibration_counts, calibration)
-    calibrated_noise = data.noise_counts * calibration.volts_per_count[:, None]
-    products = _products(ota, data.sample_rate, data.pri_samples, data.start_sample)
     waterfall_colormap = ui.colormap(
         "lfm_waterfall_colormap",
         label="Colormap",
@@ -482,29 +615,6 @@ def analyze_lfm(data: LfmInput, ui: AnalysisContext) -> None:
         group="Waterfall display",
     )
 
-    phase_rows = [
-        {
-            "Channel": channel + 1,
-            "Reference": "Yes" if channel == calibration.phase_reference_channel else "",
-            "Phase correction": f"{-calibration.phase_offsets[channel] * 180 / pi:+.2f} deg",
-        }
-        for channel in range(4)
-    ]
-    amplitude_rows = [
-        {
-            "Channel": channel + 1,
-            "Normalization": f"{calibration.amplitude_corrections[channel]:.4f}x",
-            "Recorded full-scale power": f"{calibration.full_scale_dbm[channel]:.2f} dBm",
-        }
-        for channel in range(4)
-    ]
-    calibrated_full_scale_voltage = (2 ** (requested_adc_bits - 1) - 1) * calibration.reference_volts_per_count
-    calibrated_full_scale_dbm = float(_db10((calibrated_full_scale_voltage**2 / (2 * R_OHMS)) / 1e-3))
-    amplitude_summary = (
-        f"Normalized to: **{calibration.amplitude_reference_label}**\n"
-        f"Calibrated scale: **{calibration.reference_volts_per_count:.4g} V/count**\n"
-        f"Calibrated full scale: **{calibrated_full_scale_dbm:.2f} dBm**"
-    )
     with ui.tab("Waterfall"):
         ui.view_switcher(
             "Domain",
@@ -561,14 +671,8 @@ def analyze_lfm(data: LfmInput, ui: AnalysisContext) -> None:
         with ui.switcher("Calibration view", key="calibration-view", selector="buttons"):
             with ui.switcher_view("Phase", columns=(0.24, 0.76)):
                 with ui.group("column"):
-                    with ui.parameter_group("Calibration parameters"):
-                        ui.select(
-                            "phase_reference",
-                            label="Phase reference",
-                            default="Channel 1",
-                            options=("Channel 1", "Channel 2", "Channel 3", "Channel 4"),
-                        )
-                    ui.table(phase_rows, key="phase-diagnostics", depends_on=("phase_reference",))
+                    ui.place_parameters("phase_reference", label="Calibration parameters")
+                    ui.table(results.phase_rows, key="phase-diagnostics", depends_on=("phase_reference",))
                 ui.plot(
                     _phase_figure(data.calibration_counts, calibration, data.sample_rate, ui.theme),
                     key="phase-plot",
@@ -576,55 +680,36 @@ def analyze_lfm(data: LfmInput, ui: AnalysisContext) -> None:
                 )
             with ui.switcher_view("Amplitude", columns=(0.3, 0.7)):
                 with ui.group("column"):
-                    with ui.parameter_group("Calibration parameters"):
-                        ui.select(
-                            "amplitude_reference",
-                            label="Amplitude reference",
-                            default="Min",
-                            options=("Channel 1", "Channel 2", "Channel 3", "Channel 4", "Min"),
-                        )
-                        ui.number(
-                            "adc_bits",
-                            label="Number of ADC bits",
-                            default=data.adc_bits,
-                            minimum=2,
-                            maximum=32,
-                            step=1,
-                        )
+                    ui.place_parameters(
+                        "amplitude_reference",
+                        "adc_bits",
+                        label="Calibration parameters",
+                    )
                     ui.text(
-                        amplitude_summary,
+                        results.amplitude_summary,
                         key="amplitude-summary",
                         depends_on=("amplitude_reference", "adc_bits"),
                     )
-                    ui.table(amplitude_rows, key="amplitude-diagnostics", depends_on=("amplitude_reference", "adc_bits"))
+                    ui.table(
+                        results.amplitude_rows,
+                        key="amplitude-diagnostics",
+                        depends_on=("amplitude_reference", "adc_bits"),
+                    )
                 ui.plot(
-                    _amplitude_figure(calibrated_tone, data, calibration, ui.theme),
+                    _amplitude_figure(results.calibrated_tone, data, calibration, ui.theme),
                     key="amplitude-plot",
                     depends_on=("amplitude_reference", "adc_bits"),
                 )
             with ui.switcher_view("Noise", columns=(0.3, 0.7)):
                 with ui.group("column"):
-                    with ui.parameter_group("Calibration parameters"):
-                        reference_noise_psd = ui.number(
-                            "reference_noise_psd_dbm_hz",
-                            label="Reference noise PSD (dBm/Hz)",
-                            default=THERMAL_NOISE_DBM_HZ,
-                            minimum=-220.0,
-                            maximum=-100.0,
-                            step=0.1,
-                        )
-                    noise_rows = [
-                        {
-                            "Channel": channel + 1,
-                            "Noise power": f"{calibration.noise_power_dbm[channel]:.2f} dBm",
-                            "Noise PSD": f"{calibration.noise_psd_dbm_hz[channel]:.2f} dBm/Hz",
-                            "Estimated NF": f"{calibration.noise_psd_dbm_hz[channel] - reference_noise_psd:.2f} dB",
-                        }
-                        for channel in range(4)
-                    ]
-                    ui.table(noise_rows, key="noise-diagnostics", depends_on=("reference_noise_psd_dbm_hz",))
+                    ui.place_parameters("reference_noise_psd_dbm_hz", label="Calibration parameters")
+                    ui.table(
+                        results.noise_rows,
+                        key="noise-diagnostics",
+                        depends_on=("reference_noise_psd_dbm_hz",),
+                    )
                 ui.plot(
-                    _noise_figure(calibrated_noise, data, calibration, ui.theme),
+                    _noise_figure(results.calibrated_noise, data, calibration, ui.theme),
                     key="noise-plot",
                 )
 

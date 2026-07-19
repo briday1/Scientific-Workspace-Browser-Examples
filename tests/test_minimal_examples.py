@@ -11,6 +11,7 @@ import sigvue_examples.sigmf as sigmf
 import sigvue_examples.style as style
 from sigvue_examples.comms import create_workspace as create_comms_workspace
 from sigvue_examples.sigmf import load_recording
+from sigvue_examples.waterfall import create_workspace as create_waterfall_workspace
 from scripts.generate_segmented_results import EVENTS, generate as generate_segmented_results
 from scripts.generate_minimal_sigmf import qam16, qpsk, write_sigmf
 
@@ -60,6 +61,7 @@ class MinimalExampleTests(unittest.TestCase):
                 "radio-astronomy-rfi",
                 "lte-recordings",
                 "lfm-live",
+                "radar-waterfall",
             ],
             [workspace["id"] for workspace in app.list_workspaces()],
         )
@@ -70,6 +72,7 @@ class MinimalExampleTests(unittest.TestCase):
             "radio-astronomy-rfi": "windowed",
             "lte-recordings": "windowed",
             "lfm-live": "live",
+            "radar-waterfall": "windowed",
         }
         for workspace in app.list_workspaces():
             self.assertIn(expected_mode_tags[workspace["id"]], workspace["tags"])
@@ -82,10 +85,10 @@ class MinimalExampleTests(unittest.TestCase):
             for spec in profile.workspaces
             if spec.attribute == "create_workspace" and spec.module_name.endswith(".waterfall")
         ]
-        self.assertEqual(2, len(waterfall_specs))
+        self.assertEqual(3, len(waterfall_specs))
         self.assertEqual(1, len({(spec.module_name, spec.attribute) for spec in waterfall_specs}))
         self.assertEqual(
-            {"downloaded-waterfall", "radio-astronomy-rfi"},
+            {"downloaded-waterfall", "radio-astronomy-rfi", "radar-waterfall"},
             {spec.metadata_overrides["identifier"] for spec in waterfall_specs},
         )
 
@@ -247,6 +250,48 @@ class MinimalExampleTests(unittest.TestCase):
             for item in items
         }
         self.assertEqual({"10 MHz", "2 MHz"}, sample_rates)
+
+    def test_generic_waterfall_reuses_radar_ota_sigmf_members(self):
+        app = create_app(config_path=ROOT / "browser.toml")
+        items = app.list_items("radar-waterfall", {})
+        self.assertEqual(2, len(items))
+        self.assertEqual({"lfm-2mhz", "lfm-10mhz"}, {item["id"] for item in items})
+        self.assertTrue(all(item["subtitle"] == "12 collection members" for item in items))
+
+        page = app.open_item("radar-waterfall", items[0]["id"])["page"]
+        self.assertEqual("windowed", page["playback"]["mode"])
+        self.assertEqual("Received power (dBFS)", page["playback"]["overview_label"])
+        self.assertEqual("waterfall-member", page["playback"]["overview_switcher_key"])
+        self.assertEqual(12, len(page["playback"]["overview_series"]))
+        self.assertTrue(all(len(series) == 400 for series in page["playback"]["overview_series"]))
+        self.assertEqual(12, len(page["rendered_views"]))
+        self.assertEqual(
+            [f"waterfall-member-{index}" for index in range(12)],
+            [view["name"] for view in page["rendered_views"]],
+        )
+        switcher = page["layout"]["children"][0]
+        self.assertEqual("view_switcher", switcher["kind"])
+        self.assertEqual("dropdown", switcher["props"]["selector"])
+        self.assertEqual(
+            [
+                *(f"Calibration · Channel {channel}" for channel in range(1, 5)),
+                *(f"Terminated noise · Channel {channel}" for channel in range(1, 5)),
+                *(f"OTA · Channel {channel}" for channel in range(1, 5)),
+            ],
+            [child["props"]["label"] for child in switcher["children"]],
+        )
+        figure = page["rendered_views"][0]["value"]
+        self.assertEqual(["scatter", "heatmap"], [trace["type"] for trace in figure["data"][:2]])
+
+    def test_single_recording_waterfall_does_not_show_member_switcher(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_sigmf(root, "single", qpsk(duration=0.01), 100_000.0, "Single recording")
+            workspace = create_waterfall_workspace({"data_root": root, "filename": "single.sigmf-meta"})
+            page = workspace.open_item("single").page
+            self.assertEqual(["waterfall-spectrum"], [view.name for view in page.views])
+            self.assertEqual("grid", page.layout.kind)
+            self.assertFalse(any(node.kind == "view_switcher" for node in page.layout.children))
 
     def test_segmented_acoustic_workspace_displays_irregular_stored_results(self):
         app = create_app(config_path=ROOT / "browser.toml")

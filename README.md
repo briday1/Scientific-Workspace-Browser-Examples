@@ -10,15 +10,15 @@ workflow. `events.py` retains the independent acoustic result viewer.
 The shared modules do not define browser behavior. `sigmf.py` only parses SigMF
 metadata and reads requested sample ranges, while `style.py` only applies Plotly
 styling to figures. Each domain module owns its browser source, delivery mode,
-parameters, analysis, tabs, and plots. This keeps the dependency direction
+parameters, processing, tabs, and plots. This keeps the dependency direction
 simple: a workspace may use the SigMF reader, but the SigMF reader never knows
 about a workspace.
 
 Each domain delivery explicitly implements the framework's typed interface—for
 example, `DataDelivery[SigMFRecording, WaterfallWindow]`. The first type is what
-the source opens, the second is exactly what the analysis function receives.
-This makes the source/delivery/analysis boundary visible without putting browser
-semantics into the shared SigMF I/O module.
+the source opens, and the second is the value passed into workspace configuration
+and processing. This makes the source/delivery/processing boundary visible
+without putting browser semantics into the shared SigMF I/O module.
 
 `capabilities.py` is the explicit bridge from that neutral I/O to Sigvue's
 optional annotation and export contracts. These workspaces write standard
@@ -36,6 +36,7 @@ menu.
 - **Radio Astronomy RFI Survey** — inspect real SigMF recordings from an Allen Telescope Array site survey using a sparse full-record power overview and a windowed spectrum/waterfall view.
 - **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset, then drag a window over its sliding-median power overview and inspect the selected time-frequency region.
 - **LFM Live View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface.
+- **Radar Data · Generic Waterfall** — point the reusable waterfall workspace at those same SigMF collection manifests, then choose any calibration, terminated-noise, or OTA channel from a dropdown without adding radar-specific plotting code.
 
 Every workspace is backed by files, but generated data is not committed. Generate the compact recordings and precomputed acoustic results with:
 

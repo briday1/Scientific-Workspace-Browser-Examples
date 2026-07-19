@@ -9,7 +9,7 @@ from pathlib import Path
 
 import plotly.graph_objects as go
 
-from sigvue.plugin import AnalysisContext, AnalysisWorkspace, DataDelivery, DataResource, DirectorySource, Segment
+from sigvue.plugin import AnalysisWorkspace, DataDelivery, DataResource, DeliveryContext, DirectorySource, Segment, ViewContext
 
 from .capabilities import SIGNAL_DISCOVERY_COLUMNS
 from .style import COLORS, style_figure
@@ -38,7 +38,7 @@ class AcousticEventCollection:
 class StoredEventDelivery(DataDelivery[AcousticEventCollection, StoredEventResults]):
     """Select one stored result; no signal processing occurs in the workspace."""
 
-    def prepare(self, collection: AcousticEventCollection, ui: AnalysisContext) -> StoredEventResults:
+    def prepare(self, collection: AcousticEventCollection, ui: DeliveryContext) -> StoredEventResults:
         selected = ui.segmented(
             duration=collection.duration_seconds,
             segments=tuple(
@@ -49,7 +49,12 @@ class StoredEventDelivery(DataDelivery[AcousticEventCollection, StoredEventResul
         return next(event for event in collection.events if event.identifier == selected.identifier)
 
 
-def analyze(event: StoredEventResults, ui: AnalysisContext) -> None:
+def process(event: StoredEventResults, settings: None) -> StoredEventResults:
+    """The source already contains post-processed products, so preserve them."""
+    return event
+
+
+def present(event: StoredEventResults, ui: ViewContext) -> None:
     ui.stat("Stored event", event.label)
     ui.stat("Confidence", f"{event.confidence:.1%}")
     ui.stat("Start", f"{event.start_seconds:.3f} s")
@@ -95,7 +100,8 @@ def create_workspace(config=None):
             describe=describe_collection,
         ),
         delivery=StoredEventDelivery(),
-        analyze=analyze,
+        process=process,
+        present=present,
         category="acoustic monitoring",
         tags=("segmented", "irregular events", "precomputed", "display-only"),
         discovery_columns=SIGNAL_DISCOVERY_COLUMNS,

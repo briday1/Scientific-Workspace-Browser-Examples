@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 
-from sigvue.plugin import AnalysisContext, AnalysisWorkspace, DataDelivery, DataResource, DirectorySource
+from sigvue.plugin import AnalysisWorkspace, DataDelivery, DataResource, DeliveryContext, DirectorySource, ViewContext
 
 from .capabilities import SIGNAL_DISCOVERY_COLUMNS, SigMFAnnotator, SigMFExporter, sigmf_discovery_summary
 from .sigmf import SigMFRecording, load_metadata, load_recording
@@ -41,10 +41,22 @@ class CommsWindow:
         return self.recording.metadata["global"].get("core:sample_rate") is None
 
 
+@dataclass(frozen=True)
+class CommsProducts:
+    modulation: str
+    symbol_rate: float | None
+    samples_per_symbol: int
+    symbols: np.ndarray
+    constellation_limit: float
+    eye_time: np.ndarray
+    eye_segments: np.ndarray
+    eye_limit: float
+
+
 class WindowedCommsDelivery(DataDelivery[SigMFRecording, CommsWindow]):
     """Select a short interval over a decimated received-power overview."""
 
-    def prepare(self, recording: SigMFRecording, ui: AnalysisContext) -> CommsWindow:
+    def prepare(self, recording: SigMFRecording, ui: DeliveryContext) -> CommsWindow:
         overview = ui.once(
             f"comms-power-overview:{recording.metadata_path}",
             lambda: _power_overview(recording),
@@ -77,7 +89,7 @@ def _power_overview(recording: SigMFRecording) -> np.ndarray:
     return 10 * np.log10(np.maximum(np.mean(np.abs(blocks) ** 2, axis=1), 1e-12))
 
 
-def analyze(data: CommsWindow, ui: AnalysisContext) -> None:
+def process(data: CommsWindow, settings: None) -> CommsProducts:
     samples = data.samples[0]
     metadata = data.recording.metadata["global"]
     modulation = _modulation_label(metadata, data.recording.metadata_path.stem)
@@ -96,28 +108,8 @@ def analyze(data: CommsWindow, ui: AnalysisContext) -> None:
 
     symbol_count = aligned.size // samples_per_symbol
     symbols = aligned[: symbol_count * samples_per_symbol].reshape(symbol_count, samples_per_symbol).mean(axis=1)
-    constellation = go.Figure(go.Scattergl(
-        x=symbols.real,
-        y=symbols.imag,
-        mode="markers",
-        marker={"color": COLORS[0], "size": 6, "opacity": 0.55},
-        showlegend=False,
-    ))
     default_constellation_limit = _comfortable_limit(symbols, 0.8)
     constellation_limit = float(metadata.get("examples:constellation_limit", default_constellation_limit))
-    constellation.update_xaxes(
-        title_text="In-phase",
-        range=[-constellation_limit, constellation_limit],
-        autorange=False,
-        scaleanchor="y",
-        scaleratio=1,
-    )
-    constellation.update_yaxes(
-        title_text="Quadrature",
-        range=[-constellation_limit, constellation_limit],
-        autorange=False,
-    )
-
     eye_length = 2 * samples_per_symbol
     eye_count = min(160, max(0, aligned.size // samples_per_symbol - 1))
     eye_segments = np.asarray([
@@ -125,37 +117,71 @@ def analyze(data: CommsWindow, ui: AnalysisContext) -> None:
         for index in range(eye_count)
     ])
     eye_time = np.arange(eye_length) / samples_per_symbol
-    eye_x = np.concatenate([np.append(eye_time, np.nan) for _ in range(eye_count)])
+    eye_limit = float(metadata.get("examples:eye_limit", _comfortable_limit(aligned, constellation_limit)))
+    return CommsProducts(
+        modulation,
+        symbol_rate,
+        samples_per_symbol,
+        symbols,
+        constellation_limit,
+        eye_time,
+        eye_segments,
+        eye_limit,
+    )
+
+
+def present(products: CommsProducts, ui: ViewContext) -> None:
+    constellation = go.Figure(go.Scattergl(
+        x=products.symbols.real,
+        y=products.symbols.imag,
+        mode="markers",
+        marker={"color": COLORS[0], "size": 6, "opacity": 0.55},
+        showlegend=False,
+    ))
+    constellation.update_xaxes(
+        title_text="In-phase",
+        range=[-products.constellation_limit, products.constellation_limit],
+        autorange=False,
+        scaleanchor="y",
+        scaleratio=1,
+    )
+    constellation.update_yaxes(
+        title_text="Quadrature",
+        range=[-products.constellation_limit, products.constellation_limit],
+        autorange=False,
+    )
+
+    eye_count = products.eye_segments.shape[0]
+    eye_x = np.concatenate([np.append(products.eye_time, np.nan) for _ in range(eye_count)])
     eye = go.Figure()
     if eye_count:
         eye.add_trace(go.Scattergl(
             x=eye_x,
-            y=np.concatenate([np.append(segment.real, np.nan) for segment in eye_segments]),
+            y=np.concatenate([np.append(segment.real, np.nan) for segment in products.eye_segments]),
             name="I",
             mode="lines",
             line={"color": COLORS[0], "width": 1},
         ))
         eye.add_trace(go.Scattergl(
             x=eye_x,
-            y=np.concatenate([np.append(segment.imag, np.nan) for segment in eye_segments]),
+            y=np.concatenate([np.append(segment.imag, np.nan) for segment in products.eye_segments]),
             name="Q",
             mode="lines",
             line={"color": COLORS[1], "width": 1},
         ))
-    eye_limit = float(metadata.get("examples:eye_limit", _comfortable_limit(aligned, constellation_limit)))
     eye.update_xaxes(title_text="Symbol periods", range=[0, 2], autorange=False)
-    eye.update_yaxes(title_text="Amplitude", range=[-eye_limit, eye_limit], autorange=False)
+    eye.update_yaxes(title_text="Amplitude", range=[-products.eye_limit, products.eye_limit], autorange=False)
 
-    ui.stat("Modulation", modulation)
-    if symbol_rate is None:
+    ui.stat("Modulation", products.modulation)
+    if products.symbol_rate is None:
         ui.stat("Coordinate basis", "Normalized samples")
-        ui.stat("Samples per symbol", samples_per_symbol)
+        ui.stat("Samples per symbol", products.samples_per_symbol)
     else:
-        ui.stat("Symbol rate", f"{symbol_rate / 1e3:g} ksym/s")
+        ui.stat("Symbol rate", f"{products.symbol_rate / 1e3:g} ksym/s")
     with ui.tab("Constellation"):
-        ui.plot(style_figure(constellation, ui.theme, f"{modulation} constellation"), key="constellation")
+        ui.plot(style_figure(constellation, ui.theme, f"{products.modulation} constellation"), key="constellation")
     with ui.tab("Eye diagram"):
-        ui.plot(style_figure(eye, ui.theme, f"{modulation} eye diagram"), key="eye")
+        ui.plot(style_figure(eye, ui.theme, f"{products.modulation} eye diagram"), key="eye")
 
 
 def _describe_recording(metadata_path: Path) -> DataResource:
@@ -194,7 +220,8 @@ def create_workspace(config=None):
         delivery=WindowedCommsDelivery(),
         annotator=SigMFAnnotator(),
         exporter=SigMFExporter(),
-        analyze=analyze,
+        process=process,
+        present=present,
         category="digital communications",
         tags=("windowed", "qpsk", "16-qam", "constellation", "eye diagram"),
         discovery_columns=SIGNAL_DISCOVERY_COLUMNS,

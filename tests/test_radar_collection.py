@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-from sigvue.plugin import AnalysisContext, ExportRequest
+from sigvue.plugin import DeliveryContext, ExportRequest
 from sigvue.rendering.dispatch import RenderKind, detect_render_kind
 from sigvue_examples.radar_collection import (
     BufferedDelivery,
@@ -19,15 +19,27 @@ from sigvue_examples.radar_collection import (
     _calibrate,
     _linear_average_db,
     _products,
-    analyze_lfm,
+    configure_lfm,
     create_workspace as create_live_workspace,
+    present_lfm,
+    process_lfm,
 )
+
+
+def render_lfm(data: LfmInput, values: dict[str, str]) -> DeliveryContext:
+    ui = DeliveryContext(values)
+    settings = configure_lfm(data, ui)
+    products = process_lfm(data, settings)
+    present_lfm(products, ui)
+    return ui
 
 
 class RadarCollectionTests(unittest.TestCase):
     def test_live_workspace_uses_shared_buffered_pipeline(self):
         live = create_live_workspace({"data_root": Path("missing")})
-        self.assertIs(analyze_lfm, live.analyze)
+        self.assertIs(configure_lfm, live.configure)
+        self.assertIs(process_lfm, live.process)
+        self.assertIs(present_lfm, live.present)
         self.assertIsInstance(live.delivery, BufferedDelivery)
         self.assertIn("10-mhz", live.metadata.tags)
         annotation_fields = {field.name: field for field in live.annotator.fields}
@@ -40,7 +52,7 @@ class RadarCollectionTests(unittest.TestCase):
     def test_whole_file_delivery_has_only_processing_prf_and_returns_all_samples(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            ui = AnalysisContext({})
+            ui = DeliveryContext({})
             delivered = WholeFileDelivery(default_processing_prf_hz=100).prepare(collection, ui)
             self.assertEqual((4, 1_000), delivered.ota_counts.shape)
             self.assertEqual(10, delivered.pri_samples)
@@ -50,7 +62,7 @@ class RadarCollectionTests(unittest.TestCase):
     def test_buffered_delivery_owns_playback_and_returns_only_window(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            ui = AnalysisContext({"buffer_seconds": "0.1", "processing_prf_hz": "100", "__playback_time_seconds": "0.4"})
+            ui = DeliveryContext({"buffer_seconds": "0.1", "processing_prf_hz": "100", "__playback_time_seconds": "0.4"})
             delivered = BufferedDelivery().prepare(collection, ui)
             self.assertEqual((4, 100), delivered.ota_counts.shape)
             self.assertEqual(400, delivered.start_sample)
@@ -61,7 +73,7 @@ class RadarCollectionTests(unittest.TestCase):
     def test_buffered_delivery_can_expose_seek_without_live_controls(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            ui = AnalysisContext({"buffer_seconds": "0.1", "processing_prf_hz": "100"})
+            ui = DeliveryContext({"buffer_seconds": "0.1", "processing_prf_hz": "100"})
             BufferedDelivery(playback_mode="seek").prepare(collection, ui)
             self.assertEqual("seek", ui.playback_config.mode)
 
@@ -71,7 +83,7 @@ class RadarCollectionTests(unittest.TestCase):
             collection = self._collection(root, sample_count=100)
             delivered = BufferedDelivery().prepare(
                 collection,
-                AnalysisContext({"buffer_seconds": "0.02", "processing_prf_hz": "100"}),
+                DeliveryContext({"buffer_seconds": "0.02", "processing_prf_hz": "100"}),
             )
             target = LfmExporter().export(
                 collection,
@@ -92,7 +104,7 @@ class RadarCollectionTests(unittest.TestCase):
                 "processing_prf_hz": "100",
                 "__playback_follow_live": "true",
             }
-            initial_ui = AnalysisContext(live_values)
+            initial_ui = DeliveryContext(live_values)
             initial = BufferedDelivery().prepare(collection, initial_ui)
             self.assertEqual(900, initial.start_sample)
             self.assertEqual(0.9, initial_ui.playback_config.duration_seconds)
@@ -101,19 +113,19 @@ class RadarCollectionTests(unittest.TestCase):
             for member in collection.members["ota"]:
                 with member.data_path.open("ab") as stream:
                     extra.tofile(stream)
-            grown = BufferedDelivery().prepare(collection, AnalysisContext(live_values))
+            grown = BufferedDelivery().prepare(collection, DeliveryContext(live_values))
             self.assertEqual(1_100, grown.start_sample)
 
             historical = BufferedDelivery().prepare(
                 collection,
-                AnalysisContext({**live_values, "__playback_follow_live": "false", "__playback_time_seconds": "0.4"}),
+                DeliveryContext({**live_values, "__playback_follow_live": "false", "__playback_time_seconds": "0.4"}),
             )
             self.assertEqual(400, historical.start_sample)
 
     def test_processing_prf_changes_whole_file_reshape_without_changing_data(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            delivered = WholeFileDelivery().prepare(collection, AnalysisContext({"processing_prf_hz": "50"}))
+            delivered = WholeFileDelivery().prepare(collection, DeliveryContext({"processing_prf_hz": "50"}))
             self.assertEqual((4, 1_000), delivered.ota_counts.shape)
             self.assertEqual(20, delivered.pri_samples)
 
@@ -184,10 +196,8 @@ class RadarCollectionTests(unittest.TestCase):
             noise_counts=samples * 0.01,
             ota_counts=samples,
         )
-        baseline = AnalysisContext({"reference_noise_psd_dbm_hz": "-174", "adc_bits": "8"})
-        changed = AnalysisContext({"reference_noise_psd_dbm_hz": "-168.5", "adc_bits": "16"})
-        analyze_lfm(data, baseline)
-        analyze_lfm(data, changed)
+        baseline = render_lfm(data, {"reference_noise_psd_dbm_hz": "-174", "adc_bits": "8"})
+        changed = render_lfm(data, {"reference_noise_psd_dbm_hz": "-168.5", "adc_bits": "16"})
 
         inline = [control for control in changed.controls if control.placement == "inline"]
         self.assertEqual(
@@ -260,12 +270,11 @@ class RadarCollectionTests(unittest.TestCase):
             self.assertEqual((-180.0, -80.0), (trace.zmin, trace.zmax))
             self.assertEqual("#0d0887", trace.colorscale[0][1])
 
-        customized = AnalysisContext({
+        customized = render_lfm(data, {
             "lfm_waterfall_colormap": "Cividis",
             "lfm_time_waterfall_limits": "-85,-15",
             "lfm_psd_waterfall_limits": "-175,-95",
         })
-        analyze_lfm(data, customized)
         for trace in customized.figures["waterfall-domain-0"].data:
             self.assertEqual((-85.0, -15.0), (trace.zmin, trace.zmax))
             self.assertEqual("#00224e", trace.colorscale[0][1])

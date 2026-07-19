@@ -7,8 +7,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import numpy as np
+from sigvue.plugin import AnnotationRequest
 
-from sigvue_examples.waterfall import _waterfall_spectrogram, create_workspace
+from sigvue_examples.waterfall import _waterfall_spectrogram, create_lte_workspace, create_workspace
 from scripts.download_radio_astronomy import is_unpacked, md5, unpack
 from scripts.generate_minimal_sigmf import write_sigmf
 
@@ -58,8 +59,9 @@ class WaterfallTests(unittest.TestCase):
             )
             self.assertEqual("windowed", opened.page.playback.mode)
             self.assertEqual("auto", opened.page.playback.time_unit)
-            self.assertEqual("Sampled wideband power (dBFS)", opened.page.playback.overview_label)
+            self.assertEqual("Received power (dBFS)", opened.page.playback.overview_label)
             self.assertEqual(400, len(opened.page.playback.overview_values))
+            self.assertEqual((), opened.page.playback.overview_series)
             controls = {control.name: control for control in opened.page.controls}
             self.assertEqual("colormap", controls["waterfall_colormap"].control_type)
             self.assertEqual("limits", controls["waterfall_dbfs_limits"].control_type)
@@ -117,6 +119,44 @@ class WaterfallTests(unittest.TestCase):
             self.assertFalse(hidden.layout.shapes)
             self.assertEqual(figure.layout.yaxis2.range, hidden.layout.yaxis2.range)
             self.assertNotEqual(figure.layout.uirevision, hidden.layout.uirevision)
+
+    def test_lte_workspace_uses_the_shared_sigmf_annotation_regions(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = np.exp(1j * 2 * np.pi * 8_000 * np.arange(2_000) / 100_000).astype(np.complex64)
+            write_sigmf(root, "lte", samples, 100_000.0, "Annotated LTE fixture")
+            metadata_path = root / "lte.sigmf-meta"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["captures"] = [{"core:sample_start": 0, "core:frequency": 806_000_000.0}]
+            metadata.pop("annotations", None)
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            opened = create_lte_workspace({"data_root": root}).open_item("lte")
+            self.assertIsNotNone(opened.page.annotation)
+            self.assertEqual((), tuple(opened.page.annotation.discover_callback()))
+            self.assertEqual(
+                "lte_annotation_region_color",
+                opened.page.annotation.timeline_color_control,
+            )
+            created = opened.page.annotation.annotate_callback({}, AnnotationRequest(
+                0.0,
+                values={
+                    "start_seconds": "0.001",
+                    "stop_seconds": "0.003",
+                    "frequency_lower_hz": "805980000",
+                    "frequency_upper_hz": "806020000",
+                    "comment": "LTE allocation",
+                },
+            ))
+            self.assertEqual("LTE allocation", created.comment)
+            self.assertEqual((created,), tuple(opened.page.annotation.discover_callback()))
+            figure = opened.page.views[0].callback({})
+            self.assertEqual(["scatter", "heatmap", "scatter", "scatter"], [trace.type for trace in figure.data])
+            self.assertIn("LTE allocation", figure.data[-1].text[0])
+            fields = {field.name: field for field in opened.page.annotation.fields}
+            self.assertEqual("lte-spectrum", fields["start_seconds"].plot_binding.view)
+            self.assertEqual("yaxis2", fields["start_seconds"].plot_binding.axis)
+            self.assertEqual("xaxis2", fields["frequency_lower_hz"].plot_binding.axis)
 
     def test_download_helpers_verify_and_safely_unpack_tar_archive(self):
         with TemporaryDirectory() as directory:
