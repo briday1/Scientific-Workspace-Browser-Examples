@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -60,8 +61,20 @@ def generate(path: Path) -> Path:
     return path
 
 
-if __name__ == "__main__":
-    output = generate(
-        Path(__file__).resolve().parents[1] / "data" / "acoustic-events-segmented" / "acoustic-events.json"
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(__file__).resolve().parents[1]
+        / "data"
+        / "acoustic-events-segmented"
+        / "acoustic-events.json",
     )
+    args = parser.parse_args()
+    output = generate(args.output)
     print(f"Wrote {output}")
+
+
+if __name__ == "__main__":
+    main()

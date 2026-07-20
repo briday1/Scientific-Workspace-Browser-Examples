@@ -61,7 +61,20 @@ menu.
 - **LFM Live View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface.
 - **Radar Data · Generic Waterfall** — point the reusable waterfall workspace at those same SigMF collection manifests, then choose any calibration, terminated-noise, or OTA channel from a dropdown without adding radar-specific plotting code.
 
-Every workspace is backed by files, but generated data is not committed. Generate the compact recordings and precomputed acoustic results with:
+Every workspace is backed by files, but generated data is not committed.
+
+To generate or download every example dataset in one command, including the
+roughly 3.4 GB radio-astronomy survey and the large LTE recordings, run:
+
+```bash
+./scripts/get_all_data.sh
+```
+
+Pass a directory as the first argument to override the default `data` root.
+The script calls each of the individual generators and downloaders described
+below and stops immediately if any one of them fails.
+
+Generate only the compact recordings and precomputed acoustic results with:
 
 ```bash
 python scripts/generate_minimal_sigmf.py
