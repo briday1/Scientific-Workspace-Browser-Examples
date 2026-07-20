@@ -1,4 +1,4 @@
-"""Windowed spectrum/waterfall workspaces for LTE and radio astronomy data."""
+"""One windowed spectrum/waterfall pipeline for files and SigMF collections."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from sigvue.plugin import (
-    AnalysisWorkspace,
     Annotation,
     AnnotationField,
     AnnotationRequest,
-    DataDelivery,
+    Annotator,
+    Delivery,
     DataResource,
-    DataSource,
+    Source,
     DeliveryContext,
     DirectorySource,
     ParameterContext,
@@ -26,23 +26,16 @@ from sigvue.plugin import (
     ViewContext,
 )
 
-from .capabilities import (
-    SIGNAL_DISCOVERY_COLUMNS,
-    SigMFExporter,
+from ..io.sigmf.capabilities import (
     WaterfallSigMFAnnotator,
     read_sigmf_annotations,
     sigmf_discovery_summary,
 )
-from .sigmf import SigMFRecording, load_metadata, load_recording
-from .style import style_figure
+from ..io.sigmf.recording import SigMFRecording, load_metadata, load_recording
+from ..style import style_figure
 
 
 COLORMAPS = ("Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo", "Blues", "Greens", "Hot", "Jet")
-FFT_SIZES = (512, 1024, 2048, 4096, 8192, 16384)
-FFT_WINDOWS = ("Hann", "Hamming", "Blackman", "Rectangular")
-OVERLAPS = (0, 25, 50, 75, 88)
-DBFS_MIN = -90.0
-DBFS_MAX = -20.0
 
 
 def _rgba(color: str, alpha: float) -> str:
@@ -98,7 +91,7 @@ class GroupedSigMFRecording:
         return tuple(recording.duration_seconds for recording in self.recordings)
 
 
-class GroupedWaterfallSigMFAnnotator:
+class GroupedWaterfallSigMFAnnotator(Annotator[GroupedSigMFRecording, WaterfallWindow]):
     """Apply the shared waterfall annotation contract to the active collection member."""
 
     timeline_color_control = "waterfall_annotation_region_color"
@@ -142,7 +135,7 @@ class GroupedWaterfallSigMFAnnotator:
         return replace(annotation, view_selections={"waterfall-member": selected})
 
 
-class SigMFCollectionSource(DataSource[GroupedSigMFRecording]):
+class SigMFCollectionSource(Source[GroupedSigMFRecording]):
     """Discover collection manifests and load every declared recording member."""
 
     def __init__(self, directory: Path, filename: str) -> None:
@@ -234,13 +227,21 @@ def _add_sigmf_annotation_regions(
     """Draw visible standard SigMF annotation bounds with hover-only descriptions."""
     if not show_annotations or frequency_mhz.size == 0:
         return
-    view_start = data.start_sample / data.sample_rate
-    view_stop = (data.start_sample + data.samples[0].size) / data.sample_rate
+    time_coordinates = np.sort(np.asarray(waterfall_time_ms, dtype=float))
+    view_start = (
+        float(time_coordinates[0]) * 1e-3
+        if time_coordinates_are_edges
+        else data.start_sample / data.sample_rate
+    )
+    view_stop = (
+        float(time_coordinates[-1]) * 1e-3
+        if time_coordinates_are_edges
+        else (data.start_sample + data.samples[0].size) / data.sample_rate
+    )
     view_lower_hz = float(np.min(frequency_mhz)) * 1e6
     view_upper_hz = float(np.max(frequency_mhz)) * 1e6
     displayed_time_start_ms = view_start * 1e3
     displayed_time_stop_ms = view_stop * 1e3
-    time_coordinates = np.sort(np.asarray(waterfall_time_ms, dtype=float))
     displayed_time_edges = (
         time_coordinates
         if time_coordinates_are_edges
@@ -357,273 +358,8 @@ def _recording_source(directory: Path, filename: str, *, recursive: bool = False
     )
 
 
-class WindowedLteDelivery(DataDelivery[SigMFRecording, WaterfallWindow]):
-    """Select an interval over a sliding-median power overview."""
-
-    def prepare(self, recording: SigMFRecording, ui: DeliveryContext) -> WaterfallWindow:
-        overview = ui.once(
-            f"lte-median-power-overview:{recording.metadata_path}",
-            lambda: _median_power_overview(recording),
-        )
-        start_seconds, end_seconds = ui.windowed(
-            duration=recording.duration_seconds,
-            default_window=min(0.005, recording.duration_seconds),
-            minimum_window=min(0.001, recording.duration_seconds),
-            step=min(0.001, recording.duration_seconds),
-            overview=overview,
-            overview_label="Sliding median power (dBFS)",
-            time_unit="ms",
-        )
-        start = round(start_seconds * recording.sample_rate)
-        count = max(1, round((end_seconds - start_seconds) * recording.sample_rate))
-        return WaterfallWindow(recording, start, tuple(recording.read(start, count)))
-
-
-def _median_power_overview(recording: SigMFRecording) -> np.ndarray:
-    bin_count = min(400, recording.sample_count)
-    edges = np.linspace(0, recording.sample_count, bin_count + 1, dtype=np.int64)
-    power = np.empty(bin_count)
-    for index, (start, end) in enumerate(zip(edges[:-1], edges[1:])):
-        samples = recording.read(int(start), int(end - start))[0]
-        power[index] = np.mean(np.abs(samples) ** 2)
-    power_dbfs = 10 * np.log10(np.maximum(power, 1e-12))
-    width = min(9, bin_count)
-    if width % 2 == 0:
-        width -= 1
-    padded = np.pad(power_dbfs, width // 2, mode="edge")
-    return np.median(np.lib.stride_tricks.sliding_window_view(padded, width), axis=1)
-
-
-@dataclass(frozen=True)
-class LteSettings:
-    fft_size: int
-    fft_window: str
-    overlap_percent: int
-    maximum_time_bins: int
-
-
-@dataclass(frozen=True)
-class LteProducts:
-    data: WaterfallWindow
-    waterfall_db: np.ndarray
-    average_db: np.ndarray
-    frequency_mhz: np.ndarray
-    time_edges_ms: np.ndarray
-    center_hz: float
-    frequency_bounds_mhz: tuple[float, float]
-    time_bounds_ms: tuple[float, float]
-
-
-def configure_lte(data: WaterfallWindow, ui: ParameterContext) -> LteSettings:
-    return LteSettings(
-        fft_size=int(ui.select(
-            "lte_fft_size",
-            label="Fast-time FFT size (samples)",
-            default=4096,
-            options=FFT_SIZES,
-            group="Spectrogram processing",
-        )),
-        fft_window=str(ui.select(
-            "lte_fft_window",
-            label="Fast-time window",
-            default="Hann",
-            options=FFT_WINDOWS,
-            group="Spectrogram processing",
-        )),
-        overlap_percent=int(ui.select(
-            "lte_overlap_percent",
-            label="Slow-time overlap (%)",
-            default=50,
-            options=OVERLAPS,
-            group="Spectrogram processing",
-        )),
-        maximum_time_bins=int(ui.number(
-            "lte_maximum_time_bins",
-            label="Maximum slow-time bins",
-            default=200,
-            minimum=25,
-            maximum=500,
-            step=25,
-            group="Spectrogram processing",
-        )),
-    )
-
-
-def process_lte(data: WaterfallWindow, settings: LteSettings) -> LteProducts:
-    samples = data.samples[0]
-    fft_size = min(settings.fft_size, samples.size)
-    hop = max(1, round(fft_size * (1 - settings.overlap_percent / 100)))
-    available_starts = np.arange(0, max(1, samples.size - fft_size + 1), hop)
-    starts = available_starts[
-        np.linspace(0, available_starts.size - 1, min(settings.maximum_time_bins, available_starts.size), dtype=int)
-    ]
-    rows = np.asarray([samples[start : start + fft_size] for start in starts])
-    taper = {
-        "Hann": np.hanning,
-        "Hamming": np.hamming,
-        "Blackman": np.blackman,
-        "Rectangular": np.ones,
-    }[settings.fft_window](fft_size)
-    spectra = np.fft.fftshift(np.fft.fft(rows * taper, axis=1), axes=1)
-    power = np.abs(spectra / max(np.sum(taper), 1)) ** 2
-    waterfall_db = 10 * np.log10(np.maximum(power, 1e-12))
-    average_db = 10 * np.log10(np.maximum(np.mean(power, axis=0), 1e-12))
-    captures = data.recording.metadata.get("captures", [])
-    center_hz = float(captures[0].get("core:frequency", 0.0)) if captures else 0.0
-    frequency_mhz = (center_hz + np.fft.fftshift(np.fft.fftfreq(fft_size, 1 / data.sample_rate))) / 1e6
-    time_edges_ms = (
-        data.start_sample
-        + _cell_edges(starts + fft_size / 2, 0.0, float(samples.size))
-    ) / data.sample_rate * 1e3
-    return LteProducts(
-        data=data,
-        waterfall_db=waterfall_db,
-        average_db=average_db,
-        frequency_mhz=frequency_mhz,
-        time_edges_ms=time_edges_ms,
-        center_hz=center_hz,
-        frequency_bounds_mhz=_axis_bounds(frequency_mhz),
-        time_bounds_ms=(
-            data.start_sample / data.sample_rate * 1e3,
-            (data.start_sample + samples.size) / data.sample_rate * 1e3,
-        ),
-    )
-
-
-def present_lte(products: LteProducts, ui: ViewContext) -> None:
-    data = products.data
-    show_annotations = ui.toggle(
-        "lte_show_annotations", default=True, label="Show annotations", group="Annotation display"
-    )
-    annotation_style = ui.trace_style(
-        "lte_annotation_region",
-        label="Annotation boxes",
-        color="#ffffff",
-        width=0.5,
-        opacity=0.6,
-        line_style="solid",
-        group="Annotation display",
-    )
-    colormap = ui.colormap(
-        "lte_colormap",
-        label="Colormap",
-        default="Plasma",
-        options=COLORMAPS,
-        group="Spectrogram display",
-    )
-    dbfs_min, dbfs_max = ui.limits(
-        "lte_dbfs_limits",
-        label="dBFS scale",
-        default=(DBFS_MIN, DBFS_MAX),
-        minimum=-120.0,
-        maximum=0.0,
-        step=1.0,
-        group="Spectrogram display",
-    )
-    samples = data.samples[0]
-    frequency_mhz = products.frequency_mhz
-    time_edges_ms = products.time_edges_ms
-    frequency_bounds_mhz = products.frequency_bounds_mhz
-    time_bounds_ms = products.time_bounds_ms
-
-    figure = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        row_heights=(0.1, 0.9),
-        vertical_spacing=0.04,
-    )
-    figure.add_trace(
-        go.Scatter(x=frequency_mhz, y=products.average_db, mode="lines", line={"color": "#087e8b"}, showlegend=False),
-        row=1,
-        col=1,
-    )
-    figure.add_trace(
-        go.Heatmap(
-            x=frequency_mhz,
-            y=time_edges_ms,
-            z=products.waterfall_db,
-            zmin=dbfs_min,
-            zmax=dbfs_max,
-            colorscale=colormap,
-            colorbar={"title": "dBFS", "tickformat": ".1f"},
-        ),
-        row=2,
-        col=1,
-    )
-    figure.update_yaxes(
-        title_text="PSD (dBFS)",
-        range=[dbfs_min, dbfs_max],
-        autorange=False,
-        uirevision=f"lte-power:{dbfs_min:.9g}:{dbfs_max:.9g}",
-        tickformat=".1f",
-        row=1,
-        col=1,
-    )
-    figure.update_yaxes(
-        title_text="Recording time (ms)",
-        tickformat="07.2f",
-        range=list(time_bounds_ms),
-        autorange=False,
-        uirevision=f"lte-time:{time_bounds_ms[0]:.12g}:{time_bounds_ms[1]:.12g}",
-        row=2,
-        col=1,
-    )
-    figure.update_xaxes(
-        range=list(frequency_bounds_mhz),
-        autorange=False,
-        uirevision=f"lte-frequency:{frequency_bounds_mhz[0]:.12g}:{frequency_bounds_mhz[1]:.12g}",
-    )
-    figure.update_xaxes(title_text="RF frequency (MHz)", tickformat="07.2f", row=2, col=1)
-    figure.update_layout(
-        uirevision=f"lte-spectrum:{data.recording.metadata_path.name}:annotations-{show_annotations}"
-    )
-    _add_sigmf_annotation_regions(
-        figure,
-        data,
-        frequency_mhz,
-        time_edges_ms,
-        annotation_style,
-        show_annotations,
-        row=2,
-        col=1,
-        time_coordinates_are_edges=True,
-    )
-
-    ui.stat("Center frequency", f"{products.center_hz / 1e6:g} MHz")
-    ui.stat("Sample rate", f"{data.sample_rate / 1e6:g} MS/s")
-    ui.stat("Displayed samples", f"{samples.size:,}")
-    with ui.tab("Spectrum + waterfall"):
-        ui.plot(
-            style_figure(figure, ui.theme, "LTE spectrum"),
-            key="lte-spectrum",
-            axis_navigation="bounded",
-        )
-
-
-def create_lte_workspace(config=None):
-    values = config or {}
-    root = Path(values.get("data_root", Path.cwd() / "data"))
-    filename = str(values.get("filename", "*.sigmf-meta"))
-    return AnalysisWorkspace(
-        identifier="lte-waterfall",
-        name="LTE Waterfall",
-        description="Windowed mode: drag or resize an interval over sliding-median power and inspect its LTE time-frequency plot.",
-        source=_recording_source(root, filename, recursive=True),
-        delivery=WindowedLteDelivery(),
-        annotator=WaterfallSigMFAnnotator("lte-spectrum", "lte_annotation_region_color"),
-        exporter=SigMFExporter(),
-        configure=configure_lte,
-        process=process_lte,
-        present=present_lte,
-        category="spectrum monitoring",
-        tags=("windowed", "single-channel", "LTE", "spectrogram", "waterfall"),
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
-    )
-
-
 class WindowedWaterfallDelivery(
-    DataDelivery[SigMFRecording | GroupedSigMFRecording, WaterfallWindow]
+    Delivery[SigMFRecording | GroupedSigMFRecording, WaterfallWindow]
 ):
     """Select a short interval over sparse power samples from a large recording."""
 
@@ -728,31 +464,48 @@ def _waterfall_spectrogram(
     samples: np.ndarray,
     fft_size: int,
     maximum_rows: int,
+    fft_window: str = "Hann",
+    overlap_percent: int = 50,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    block_count = max(1, int(np.ceil(samples.size / fft_size)))
-    row_count = min(maximum_rows, block_count)
-    block_edges = np.linspace(0, block_count, row_count + 1, dtype=np.int64)
-    selected = (block_edges[:-1] + block_edges[1:] - 1) // 2
-    blocks = []
-    for block_index in selected:
-        start = int(block_index) * fft_size
-        block = samples[start : start + fft_size]
-        if block.size < fft_size:
-            block = np.pad(block, (0, fft_size - block.size))
-        blocks.append(block)
-    blocks = np.asarray(blocks)
-    time_edges = np.minimum(block_edges.astype(float) * fft_size, samples.size)
-    window = np.hanning(fft_size)
+    """Compute the shared overlapped STFT used by every waterfall workspace."""
+    if samples.size < fft_size:
+        samples = np.pad(samples, (0, fft_size - samples.size))
+    hop = max(1, round(fft_size * (1 - overlap_percent / 100)))
+    available_starts = np.arange(0, samples.size - fft_size + 1, hop, dtype=np.int64)
+    selected = np.linspace(
+        0,
+        available_starts.size - 1,
+        min(maximum_rows, available_starts.size),
+        dtype=np.int64,
+    )
+    starts = available_starts[selected]
+    blocks = np.asarray([samples[start : start + fft_size] for start in starts])
+    window = {
+        "Hann": np.hanning,
+        "Hamming": np.hamming,
+        "Blackman": np.blackman,
+        "Rectangular": np.ones,
+    }[fft_window](fft_size)
     spectra = np.fft.fftshift(np.fft.fft(blocks * window, axis=1), axes=1)
     power = (np.abs(spectra) / max(np.sum(window), 1)) ** 2
-    power_dbfs = 10 * np.log10(np.maximum(power, 1e-18))
-    average_dbfs = 10 * np.log10(np.maximum(np.mean(power, axis=0), 1e-18))
+    # Keep the useful deep sidelobes of deterministic signals.  A -180 dB
+    # plotting floor hid real calibration structure around -200 dB.
+    plotting_floor = 1e-30
+    power_dbfs = 10 * np.log10(np.maximum(power, plotting_floor))
+    average_dbfs = 10 * np.log10(np.maximum(np.mean(power, axis=0), plotting_floor))
+    time_edges = _cell_edges(
+        starts + fft_size / 2,
+        float(starts[0]),
+        float(starts[-1] + fft_size),
+    )
     return power_dbfs, average_dbfs, time_edges
 
 
 @dataclass(frozen=True)
 class WaterfallSettings:
     fft_size: int
+    fft_window: str
+    overlap_percent: int
     maximum_rows: int
 
 
@@ -772,6 +525,7 @@ class WaterfallChannelProducts:
 @dataclass(frozen=True)
 class WaterfallProducts:
     channels: tuple[WaterfallChannelProducts, ...]
+    settings: WaterfallSettings
 
 
 def configure_waterfall(data: WaterfallWindow, ui: ParameterContext) -> WaterfallSettings:
@@ -783,9 +537,23 @@ def configure_waterfall(data: WaterfallWindow, ui: ParameterContext) -> Waterfal
             options=(1024, 2048, 4096, 8192, 16384),
             group="Spectrogram processing",
         )),
+        fft_window=str(ui.select(
+            "waterfall_fft_window",
+            label="Fast-time window",
+            default="Hann",
+            options=("Hann", "Hamming", "Blackman", "Rectangular"),
+            group="Spectrogram processing",
+        )),
+        overlap_percent=int(ui.select(
+            "waterfall_overlap_percent",
+            label="Slow-time overlap (%)",
+            default=50,
+            options=(0, 25, 50, 75, 88),
+            group="Spectrogram processing",
+        )),
         maximum_rows=int(ui.number(
             "waterfall_maximum_time_bins",
-            label="Maximum time bins",
+            label="Maximum slow-time bins",
             default=200,
             minimum=25,
             maximum=500,
@@ -811,7 +579,11 @@ def process_waterfall(data: WaterfallWindow, settings: WaterfallSettings) -> Wat
     for recording, label, start, samples in zip(recordings, labels, starts, channel_samples):
         fft_size = min(settings.fft_size, max(8, samples.size))
         waterfall_dbfs, average_dbfs, row_time_edges_samples = _waterfall_spectrogram(
-            samples, fft_size, settings.maximum_rows
+            samples,
+            fft_size,
+            settings.maximum_rows,
+            settings.fft_window,
+            settings.overlap_percent,
         )
         frequency_offset = np.fft.fftshift(np.fft.fftfreq(fft_size, 1 / data.sample_rate))
         captures = recording.metadata.get("captures", [{}])
@@ -828,11 +600,11 @@ def process_waterfall(data: WaterfallWindow, settings: WaterfallSettings) -> Wat
             center_hz=center_hz,
             frequency_bounds_mhz=_axis_bounds(frequency_mhz),
             time_bounds_ms=(
-                start / data.sample_rate * 1e3,
-                (start + samples.size) / data.sample_rate * 1e3,
+                (start + row_time_edges_samples[0]) / data.sample_rate * 1e3,
+                (start + row_time_edges_samples[-1]) / data.sample_rate * 1e3,
             ),
         ))
-    return WaterfallProducts(tuple(channels))
+    return WaterfallProducts(tuple(channels), settings)
 
 
 def _waterfall_channel_figure(
@@ -843,6 +615,7 @@ def _waterfall_channel_figure(
     limits: tuple[float, float],
     annotation_style: TraceStyle,
     show_annotations: bool,
+    scale_revision: str,
 ) -> go.Figure:
     data = products.data
     zmin, zmax = limits
@@ -852,8 +625,8 @@ def _waterfall_channel_figure(
         rows=2,
         cols=1,
         shared_xaxes=True,
-        row_heights=[0.3, 0.7],
-        vertical_spacing=0.06,
+        row_heights=[0.1, 0.9],
+        vertical_spacing=0.04,
     )
     figure.add_trace(
         go.Scatter(
@@ -882,7 +655,9 @@ def _waterfall_channel_figure(
         title_text="Power (dBFS)",
         range=[zmin, zmax],
         autorange=False,
-        uirevision=f"waterfall-power:{zmin:.9g}:{zmax:.9g}",
+        uirevision=(
+            f"waterfall-power:{zmin:.9g}:{zmax:.9g}:{scale_revision}"
+        ),
         row=1,
         col=1,
     )
@@ -907,7 +682,8 @@ def _waterfall_channel_figure(
         uirevision=(
             f"waterfall:{data.recording.metadata_path.name}:{products.label}:"
             f"annotations-{show_annotations}"
-        )
+        ),
+        datarevision=scale_revision,
     )
     _add_sigmf_annotation_regions(
         figure,
@@ -923,21 +699,33 @@ def _waterfall_channel_figure(
     return style_figure(figure, theme, f"{products.label} · spectrum and waterfall")
 
 
+def _rounded_limits(lower: float, upper: float, *, minimum_span: float = 10.0) -> tuple[float, float]:
+    lower = float(np.clip(lower, -300.0, 6.0))
+    upper = float(np.clip(upper, -300.0, 6.0))
+    if upper - lower < minimum_span:
+        midpoint = (lower + upper) / 2
+        lower, upper = midpoint - minimum_span / 2, midpoint + minimum_span / 2
+        if lower < -300.0:
+            lower, upper = -300.0, -300.0 + minimum_span
+        elif upper > 6.0:
+            lower, upper = 6.0 - minimum_span, 6.0
+    return float(np.floor(lower)), float(np.ceil(upper))
+
+
 def _automatic_dbfs_limits(products: WaterfallChannelProducts) -> tuple[float, float]:
-    """Choose stable display limits from one member's delivered power products."""
+    """Discover one shared spectrum/waterfall range whenever the view refreshes."""
     finite = products.waterfall_dbfs[np.isfinite(products.waterfall_dbfs)]
-    finite_average = products.average_dbfs[np.isfinite(products.average_dbfs)]
     if finite.size == 0:
         return -100.0, -20.0
-    lower = float(np.percentile(finite, 5)) - 3.0
     upper_candidates = [float(np.percentile(finite, 99.5)) + 3.0]
+    finite_average = products.average_dbfs[np.isfinite(products.average_dbfs)]
     if finite_average.size:
         upper_candidates.append(float(np.max(finite_average)) + 3.0)
     upper = max(upper_candidates)
-    if upper - lower < 20.0:
-        lower = upper - 20.0
-    lower = max(lower, upper - 100.0)
-    return float(np.floor(max(-180.0, lower))), float(np.ceil(min(3.0, upper)))
+    median = float(np.median(finite))
+    peak = upper - 3.0
+    lower = median - 6.0 if peak - median > 60.0 else float(np.percentile(finite, 5.0)) - 3.0
+    return _rounded_limits(lower, upper)
 
 
 def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
@@ -963,18 +751,34 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
     auto_scale = ui.toggle(
         "waterfall_auto_dbfs_scale",
         default=True,
-        label="Auto dBFS scale per member",
+        label="Auto-discover scales from each member",
         group="Spectrogram display",
     )
     zmin, zmax = ui.limits(
         "waterfall_dbfs_limits",
-        label="dBFS scale",
-        default=(-100.0, -20.0),
-        minimum=-140.0,
-        maximum=0.0,
+        label="Manual dBFS limits (Auto off)",
+        default=(-90.0, -20.0),
+        minimum=-300.0,
+        maximum=6.0,
         step=1.0,
         group="Spectrogram display",
     )
+    scale_revision = ":".join((
+        str(products.settings.fft_size),
+        products.settings.fft_window,
+        str(products.settings.overlap_percent),
+        str(products.settings.maximum_rows),
+        str(auto_scale),
+        f"{zmin:.9g}",
+        f"{zmax:.9g}",
+        colormap,
+        str(show_annotations),
+        annotation_style.color,
+        f"{annotation_style.width:.9g}",
+        annotation_style.line_style,
+        annotation_style.marker,
+        f"{annotation_style.opacity:.9g}",
+    ))
     figures = {
         channel.label: _waterfall_channel_figure(
             channel,
@@ -983,6 +787,7 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
             limits=_automatic_dbfs_limits(channel) if auto_scale else (zmin, zmax),
             annotation_style=annotation_style,
             show_annotations=show_annotations,
+            scale_revision=scale_revision,
         )
         for channel in products.channels
     }
@@ -992,11 +797,7 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
     ui.stat("Members", len(products.channels))
     with ui.tab("Spectrum + waterfall"):
         if len(figures) == 1:
-            ui.plot(
-                next(iter(figures.values())),
-                key="waterfall-spectrum",
-                axis_navigation="bounded",
-            )
+            ui.plot(next(iter(figures.values())), key="waterfall-spectrum", axis_navigation="bounded")
         else:
             ui.view_switcher(
                 "Recording member",
@@ -1005,36 +806,3 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
                 selector="dropdown",
                 axis_navigation="bounded",
             )
-
-
-def create_workspace(config=None):
-    """Create one reusable SigMF waterfall analysis instance."""
-    values = config or {}
-    root = Path(values.get("data_root", Path.cwd() / "data"))
-    filename = str(values.get("filename", "*.sigmf-meta"))
-    source_type = str(values.get("source_type", "recording"))
-    is_collection = source_type == "collection" or "sigmf-collection" in filename
-    source = (
-        SigMFCollectionSource(root, filename)
-        if is_collection
-        else _recording_source(root, filename, recursive=True)
-    )
-    return AnalysisWorkspace(
-        identifier="waterfall",
-        name="Waterfall",
-        description="Windowed mode: inspect a SigMF recording as an average spectrum and waterfall.",
-        source=source,
-        delivery=WindowedWaterfallDelivery(),
-        annotator=(
-            GroupedWaterfallSigMFAnnotator()
-            if is_collection
-            else WaterfallSigMFAnnotator("waterfall-spectrum", "waterfall_annotation_region_color")
-        ),
-        exporter=None if is_collection else SigMFExporter(),
-        configure=configure_waterfall,
-        process=process_waterfall,
-        present=present_waterfall,
-        category="spectrum monitoring",
-        tags=("windowed", "sigmf", "spectrogram", "waterfall"),
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
-    )

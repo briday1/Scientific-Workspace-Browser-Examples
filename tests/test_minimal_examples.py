@@ -7,11 +7,11 @@ from tempfile import TemporaryDirectory
 from sigvue.web.application import create_app
 from sigvue.profile import load_browser_profile
 
-import sigvue_examples.sigmf as sigmf
+import sigvue_examples.io.sigmf.recording as sigmf
 import sigvue_examples.style as style
-from sigvue_examples.comms import create_workspace as create_comms_workspace
-from sigvue_examples.sigmf import load_recording
-from sigvue_examples.waterfall import create_workspace as create_waterfall_workspace
+from sigvue_examples.comms.workspace import create_workspace as create_comms_workspace
+from sigvue_examples.io.sigmf.recording import load_recording
+from sigvue_examples.waterfall.workspace import create_workspace as create_waterfall_workspace
 from scripts.generate_segmented_results import EVENTS, generate as generate_segmented_results
 from scripts.generate_minimal_sigmf import qam16, qpsk, write_sigmf
 
@@ -83,12 +83,12 @@ class MinimalExampleTests(unittest.TestCase):
         waterfall_specs = [
             spec
             for spec in profile.workspaces
-            if spec.attribute == "create_workspace" and spec.module_name.endswith(".waterfall")
+            if spec.attribute == "create_workspace" and spec.module_name.endswith(".waterfall.workspace")
         ]
-        self.assertEqual(3, len(waterfall_specs))
+        self.assertEqual(4, len(waterfall_specs))
         self.assertEqual(1, len({(spec.module_name, spec.attribute) for spec in waterfall_specs}))
         self.assertEqual(
-            {"downloaded-waterfall", "radio-astronomy-rfi", "radar-waterfall"},
+            {"downloaded-waterfall", "radio-astronomy-rfi", "lte-recordings", "radar-waterfall"},
             {spec.metadata_overrides["identifier"] for spec in waterfall_specs},
         )
 
@@ -166,62 +166,43 @@ class MinimalExampleTests(unittest.TestCase):
         item = next(item for item in items if "downlink" in item["id"])
         page = app.open_item("lte-recordings", item["id"])["page"]
         self.assertEqual("windowed", page["playback"]["mode"])
-        self.assertEqual("ms", page["playback"]["time_unit"])
-        self.assertEqual("Sliding median power (dBFS)", page["playback"]["overview_label"])
+        self.assertEqual("auto", page["playback"]["time_unit"])
+        self.assertEqual("Received power (dBFS)", page["playback"]["overview_label"])
         self.assertEqual(400, len(page["playback"]["overview_values"]))
-        self.assertEqual(["lte-spectrum"], [view["name"] for view in page["rendered_views"]])
+        self.assertEqual(["waterfall-spectrum"], [view["name"] for view in page["rendered_views"]])
         figure = page["rendered_views"][0]["value"]
         self.assertEqual(["scatter", "heatmap"], [trace["type"] for trace in figure["data"][:2]])
         self.assertEqual("RF frequency (MHz)", figure["layout"]["xaxis2"]["title"]["text"])
         self.assertEqual("Recording time (ms)", figure["layout"]["yaxis2"]["title"]["text"])
-        self.assertEqual("07.2f", figure["layout"]["xaxis2"]["tickformat"])
-        self.assertEqual("07.2f", figure["layout"]["yaxis2"]["tickformat"])
-        self.assertEqual([-90.0, -20.0], figure["layout"]["yaxis"]["range"])
-        self.assertEqual(".1f", figure["layout"]["yaxis"]["tickformat"])
-        self.assertEqual((-90.0, -20.0), (figure["data"][1]["zmin"], figure["data"][1]["zmax"]))
-        self.assertEqual(".1f", figure["data"][1]["colorbar"]["tickformat"])
         self.assertEqual("#0d0887", figure["data"][1]["colorscale"][0][1])
-        self.assertEqual(
-            "lte-spectrum:LTE_downlink_806MHz_2022-04-09_30720ksps.sigmf-meta:annotations-True",
-            figure["layout"]["uirevision"],
-        )
-        colormap = next(control for control in page["controls"] if control["name"] == "lte_colormap")
+        colormap = next(control for control in page["controls"] if control["name"] == "waterfall_colormap")
         self.assertEqual("colormap", colormap["control_type"])
         self.assertEqual(10, len(colormap["options"]))
         self.assertEqual(10, len(colormap["option_previews"]))
         self.assertEqual("Plasma", colormap["default"])
         self.assertEqual("details", colormap["placement"])
-        self.assertEqual(
-            ["lte_colormap", "lte_dbfs_limits"],
-            [control["name"] for control in page["controls"] if control["group"] == "Spectrogram display"],
-        )
         controls = {control["name"]: control for control in page["controls"]}
-        limits = controls["lte_dbfs_limits"]
-        self.assertEqual("limits", limits["control_type"])
-        self.assertEqual((-90.0, -20.0), limits["default"])
-        self.assertEqual((-120.0, 0.0, 1.0), (limits["minimum"], limits["maximum"], limits["step"]))
-        self.assertEqual(4096, controls["lte_fft_size"]["default"])
-        self.assertEqual("Hann", controls["lte_fft_window"]["default"])
-        self.assertEqual(50, controls["lte_overlap_percent"]["default"])
-        self.assertEqual(200, controls["lte_maximum_time_bins"]["default"])
-        self.assertTrue(
-            all(controls[name]["placement"] == "details" for name in (
-                "lte_fft_size",
-                "lte_fft_window",
-                "lte_overlap_percent",
-                "lte_maximum_time_bins",
-            ))
-        )
+        self.assertTrue(controls["waterfall_auto_dbfs_scale"]["default"])
+        self.assertEqual((-90.0, -20.0), controls["waterfall_dbfs_limits"]["default"])
+        self.assertEqual(4096, controls["waterfall_fft_size"]["default"])
+        self.assertEqual("Hann", controls["waterfall_fft_window"]["default"])
+        self.assertEqual(50, controls["waterfall_overlap_percent"]["default"])
+        self.assertEqual(200, controls["waterfall_maximum_time_bins"]["default"])
+        self.assertTrue(controls["waterfall_show_annotations"]["default"])
+        self.assertEqual(0.6, controls["waterfall_annotation_region_opacity"]["default"])
         self.assertEqual("806 MHz", page["statistics"]["Center frequency"])
 
-        changed = app.open_item("lte-recordings", item["id"], {"lte_colormap": "Cividis"})["page"]
+        changed = app.open_item("lte-recordings", item["id"], {"waterfall_colormap": "Cividis"})["page"]
         changed_scale = changed["rendered_views"][0]["value"]["data"][1]["colorscale"]
         self.assertEqual("#00224e", changed_scale[0][1])
 
-        changed = app.open_item("lte-recordings", item["id"], {"lte_dbfs_limits": "-82,-12"})["page"]
+        changed = app.open_item("lte-recordings", item["id"], {
+            "waterfall_auto_dbfs_scale": "false",
+            "waterfall_dbfs_limits": "-92,-22",
+        })["page"]
         changed_figure = changed["rendered_views"][0]["value"]
-        self.assertEqual([-82.0, -12.0], changed_figure["layout"]["yaxis"]["range"])
-        self.assertEqual((-82.0, -12.0), (changed_figure["data"][1]["zmin"], changed_figure["data"][1]["zmax"]))
+        self.assertEqual([-92.0, -22.0], changed_figure["layout"]["yaxis"]["range"])
+        self.assertEqual((-92.0, -22.0), (changed_figure["data"][1]["zmin"], changed_figure["data"][1]["zmax"]))
 
         recording = load_recording(
             ROOT / "data/lte/downlink/LTE_downlink_806MHz_2022-04-09_30720ksps.sigmf-meta"
@@ -297,8 +278,8 @@ class MinimalExampleTests(unittest.TestCase):
         self.assertEqual(["scatter", "heatmap"], [trace["type"] for trace in figure["data"][:2]])
         calibration_time_range = page["rendered_views"][0]["value"]["layout"]["yaxis2"]["range"]
         ota_time_range = page["rendered_views"][8]["value"]["layout"]["yaxis2"]["range"]
-        self.assertAlmostEqual(20.0, calibration_time_range[1] - calibration_time_range[0])
-        self.assertAlmostEqual(20.0, ota_time_range[1] - ota_time_range[0])
+        self.assertAlmostEqual(19.8656, calibration_time_range[1] - calibration_time_range[0])
+        self.assertAlmostEqual(19.8656, ota_time_range[1] - ota_time_range[0])
         calibration_dbfs_range = page["rendered_views"][0]["value"]["layout"]["yaxis"]["range"]
         noise_dbfs_range = page["rendered_views"][4]["value"]["layout"]["yaxis"]["range"]
         self.assertNotEqual(calibration_dbfs_range, noise_dbfs_range)
@@ -310,8 +291,8 @@ class MinimalExampleTests(unittest.TestCase):
         )["page"]
         wide_calibration_range = wide["rendered_views"][0]["value"]["layout"]["yaxis2"]["range"]
         wide_ota_range = wide["rendered_views"][8]["value"]["layout"]["yaxis2"]["range"]
-        self.assertAlmostEqual(100.0, wide_calibration_range[1] - wide_calibration_range[0])
-        self.assertAlmostEqual(500.0, wide_ota_range[1] - wide_ota_range[0])
+        self.assertAlmostEqual(99.9424, wide_calibration_range[1] - wide_calibration_range[0])
+        self.assertAlmostEqual(499.9168, wide_ota_range[1] - wide_ota_range[0])
 
     def test_single_recording_waterfall_does_not_show_member_switcher(self):
         with TemporaryDirectory() as directory:

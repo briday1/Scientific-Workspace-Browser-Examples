@@ -1,0 +1,31 @@
+"""Workspace assembly for the live calibrated LFM pipeline."""
+
+from pathlib import Path
+
+from sigvue.plugin import Workspace
+
+from ..io.sigmf.capabilities import SIGNAL_DISCOVERY_COLUMNS
+from .analysis import LfmAnalysis
+from .capabilities import LfmAnnotator, LfmExporter
+from .delivery import BufferedDelivery
+from .plots import LfmPresentation
+from .source import collection_source
+
+
+def create_workspace(config=None) -> Workspace:
+    values = config or {}
+    root = Path(values.get("data_root", Path.cwd() / "data/lfm-live"))
+    return Workspace(
+        identifier="lfm-live",
+        name="LFM Live View",
+        delivery=BufferedDelivery(),
+        description="Choose a 10 MHz single-return or 2 MHz multi-target collection, then follow it live or seek through history using the same buffered calibration analysis.",
+        source=collection_source(root),
+        annotator=LfmAnnotator(),
+        exporter=LfmExporter(),
+        analysis=LfmAnalysis(),
+        presentation=LfmPresentation(),
+        category="signal analysis",
+        tags=("live", "four-channel", "calibrated", "LFM", "10-mhz", "2-mhz", "multi-target", "waterfall"),
+        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
+    )

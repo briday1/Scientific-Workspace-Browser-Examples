@@ -1,0 +1,29 @@
+name: Test examples
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out examples
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Sigvue main and examples
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pip install "sigvue @ git+https://github.com/briday1/sigvue.git@main"
+          python -m pip install --no-deps -e .
+
+      - name: Run example tests
+        run: python -m pytest -q tests

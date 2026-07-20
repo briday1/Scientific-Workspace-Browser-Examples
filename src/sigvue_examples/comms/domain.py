@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 
-from sigvue.plugin import AnalysisWorkspace, DataDelivery, DataResource, DeliveryContext, DirectorySource, ViewContext
+from sigvue.plugin import DataResource, Delivery, DeliveryContext, ViewContext
 
-from .capabilities import SIGNAL_DISCOVERY_COLUMNS, SigMFAnnotator, SigMFExporter, sigmf_discovery_summary
-from .sigmf import SigMFRecording, load_metadata, load_recording
-from .style import COLORS, style_figure
+from ..io.sigmf.capabilities import sigmf_discovery_summary
+from ..io.sigmf.recording import SigMFRecording, load_metadata
+from ..style import COLORS, style_figure
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class CommsProducts:
     eye_limit: float
 
 
-class WindowedCommsDelivery(DataDelivery[SigMFRecording, CommsWindow]):
+class WindowedCommsDelivery(Delivery[SigMFRecording, CommsWindow]):
     """Select a short interval over a decimated received-power overview."""
 
     def prepare(self, recording: SigMFRecording, ui: DeliveryContext) -> CommsWindow:
@@ -201,30 +201,6 @@ def _describe_recording(metadata_path: Path) -> DataResource:
         timestamp=datetime.fromtimestamp(metadata_path.stat().st_mtime, tz=timezone.utc),
         tags=("sigmf", str(global_metadata["core:datatype"]), modulation.lower()),
         summary=sigmf_discovery_summary(metadata),
-    )
-
-
-def create_workspace(config=None):
-    values = config or {}
-    root = Path(values.get("data_root", Path.cwd() / "data/comms"))
-    return AnalysisWorkspace(
-        identifier="digital-comms",
-        name="Digital Communications",
-        description="Windowed mode: compare file-backed QPSK and 16-QAM recordings with constellation and eye-diagram views.",
-        source=DirectorySource(
-            root,
-            pattern="*.sigmf-meta",
-            loader=lambda path: load_recording(path, sample_rate_fallback=1.0),
-            describe=_describe_recording,
-        ),
-        delivery=WindowedCommsDelivery(),
-        annotator=SigMFAnnotator(),
-        exporter=SigMFExporter(),
-        process=process,
-        present=present,
-        category="digital communications",
-        tags=("windowed", "qpsk", "16-qam", "constellation", "eye diagram"),
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
     )
 
 

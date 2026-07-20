@@ -16,13 +16,13 @@ from sigvue.plugin import (
     AnnotationPlotBinding,
     AnnotationRequest,
     CapabilityChoice,
-    DataAnnotator,
+    Annotator,
     DiscoveryColumn,
-    DataExporter,
+    Exporter,
     ExportRequest,
 )
 
-from .sigmf import SigMFRecording, annotations, append_annotation
+from .recording import SigMFRecording, annotations, append_annotation
 
 
 SCOPES = (CapabilityChoice("buffer", "Current buffer"), CapabilityChoice("full", "Full file"))
@@ -182,7 +182,7 @@ def waterfall_annotation_fields(
     )
 
 
-class WaterfallSigMFAnnotator(DataAnnotator[SigMFRecording, Any]):
+class WaterfallSigMFAnnotator(Annotator[SigMFRecording, Any]):
     """SigMF annotator whose bounds come from one waterfall Plotly view."""
 
     def __init__(self, view: str, timeline_color_control: str):
@@ -220,7 +220,7 @@ class WaterfallSigMFAnnotator(DataAnnotator[SigMFRecording, Any]):
         )
 
 
-class SigMFAnnotator(DataAnnotator[SigMFRecording, Any]):
+class SigMFAnnotator(Annotator[SigMFRecording, Any]):
     @property
     def fields(self) -> tuple[AnnotationField, ...]:
         return annotation_fields()
@@ -298,7 +298,7 @@ def _write_numeric_matrix(stream: Any, values: np.ndarray, chunk_size: int = 16_
     stream.write("]")
 
 
-class SigMFExporter(DataExporter[SigMFRecording, Any]):
+class SigMFExporter(Exporter[SigMFRecording, Any]):
     @property
     def scopes(self) -> tuple[CapabilityChoice, ...]:
         return SCOPES

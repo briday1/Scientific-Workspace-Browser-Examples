@@ -7,8 +7,8 @@ import numpy as np
 from scipy.io import loadmat
 
 from sigvue.plugin import AnnotationRequest, ExportRequest
-from sigvue_examples.capabilities import SigMFAnnotator, SigMFExporter, WaterfallSigMFAnnotator
-from sigvue_examples.sigmf import load_recording
+from sigvue_examples.io.sigmf.capabilities import SigMFAnnotator, SigMFExporter, WaterfallSigMFAnnotator
+from sigvue_examples.io.sigmf.recording import load_recording
 
 
 class SigMFCapabilityTests(unittest.TestCase):

@@ -16,13 +16,11 @@ from scipy.io import savemat
 from sigvue.plugin import (
     Annotation,
     AnnotationRequest,
-    AnalysisWorkspace,
-    DataAnnotator,
-    DataDelivery,
-    DataExporter,
+    Annotator,
+    Delivery,
+    Exporter,
     DataResource,
     DeliveryContext,
-    DirectorySource,
     ExportRequest,
     ParameterContext,
     PlaybackMode,
@@ -30,17 +28,17 @@ from sigvue.plugin import (
     ViewContext,
 )
 
-from .capabilities import (
+from ..io.sigmf.capabilities import (
     FORMATS,
     SCOPES,
-    SIGNAL_DISCOVERY_COLUMNS,
     add_sigmf_annotation,
     read_sigmf_annotations,
     sigmf_discovery_summary,
     waterfall_annotation_fields,
 )
-from .sigmf import load_recording
-from .style import ORANGE, TEAL, hsv_channel_colors, style_plotly
+from ..io.sigmf.recording import load_recording
+from ..style import ORANGE, TEAL, style_plotly
+from .style import hsv_channel_colors
 
 
 R_OHMS = 50.0
@@ -105,7 +103,7 @@ class LfmInput:
     annotations: tuple[Annotation, ...] = ()
 
 
-class LfmAnnotator(DataAnnotator[LfmCollection, LfmInput]):
+class LfmAnnotator(Annotator[LfmCollection, LfmInput]):
     """Store matching standard SigMF annotations on all four OTA members."""
 
     timeline_color_control = "lfm_annotation_region_color"
@@ -153,7 +151,7 @@ class LfmAnnotator(DataAnnotator[LfmCollection, LfmInput]):
         return result
 
 
-class LfmExporter(DataExporter[LfmCollection, LfmInput]):
+class LfmExporter(Exporter[LfmCollection, LfmInput]):
     """Serialize either the delivered OTA window or every collection member."""
 
     @property
@@ -225,7 +223,7 @@ def _write_numeric_matrix(stream: Any, values: np.ndarray, chunk_size: int = 16_
     stream.write("]")
 
 
-class BufferedDelivery(DataDelivery[LfmCollection, LfmInput]):
+class BufferedDelivery(Delivery[LfmCollection, LfmInput]):
     """Framework policy for playback: deliver one requested OTA window."""
 
     def __init__(self, *, playback_mode: PlaybackMode = "live") -> None:
@@ -261,7 +259,7 @@ class BufferedDelivery(DataDelivery[LfmCollection, LfmInput]):
         return _input(collection, start=start, count=size, pri=pri, ui=ui)
 
 
-class WholeFileDelivery(DataDelivery[LfmCollection, LfmInput]):
+class WholeFileDelivery(Delivery[LfmCollection, LfmInput]):
     """Framework policy for batch mode: deliver the complete OTA member files."""
 
     def __init__(self, *, default_processing_prf_hz: float | None = None) -> None:
@@ -297,52 +295,6 @@ def _input(collection: LfmCollection, *, start: int, count: int, pri: int, ui: D
         noise_counts=noise,
         ota_counts=collection.read("ota", start, count),
         annotations=current_annotations,
-    )
-
-
-def create_lfm_workspace(
-    path: Path | None,
-    *,
-    identifier: str,
-    name: str,
-    delivery: DataDelivery[LfmCollection, LfmInput],
-    description: str = "Manifest-defined calibration, noise, and OTA LFM collection.",
-    tags: tuple[str, ...] = ("lfm", "2-mhz", "calibration", "four-channel", "multi-target"),
-) -> AnalysisWorkspace:
-    directory = path or Path.cwd() / "data" / "lfm-collection"
-    return AnalysisWorkspace(
-        identifier=identifier,
-        name=name,
-        description=description,
-        source=DirectorySource(
-            directory,
-            pattern="*.sigmf-collection",
-            loader=read_collection,
-            describe=describe_collection,
-            recursive=True,
-        ),
-        delivery=delivery,
-        annotator=LfmAnnotator(),
-        exporter=LfmExporter(),
-        configure=configure_lfm,
-        process=process_lfm,
-        present=present_lfm,
-        category="signal analysis",
-        tags=tags,
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
-    )
-
-
-def create_workspace(config=None) -> AnalysisWorkspace:
-    """Create the single live workspace that discovers both LFM collections."""
-    values = config or {}
-    return create_lfm_workspace(
-        Path(values.get("data_root", Path.cwd() / "data/lfm-live")),
-        identifier="lfm-live",
-        name="LFM Live View",
-        delivery=BufferedDelivery(),
-        description="Choose a 10 MHz single-return or 2 MHz multi-target collection, then follow it live or seek through history using the same buffered calibration analysis.",
-        tags=("live", "four-channel", "calibrated", "LFM", "10-mhz", "2-mhz", "multi-target", "waterfall"),
     )
 
 

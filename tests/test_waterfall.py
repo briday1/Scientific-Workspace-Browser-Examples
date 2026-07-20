@@ -9,13 +9,14 @@ import unittest
 import numpy as np
 from sigvue.plugin import AnnotationRequest
 
-from sigvue_examples.waterfall import _waterfall_spectrogram, create_lte_workspace, create_workspace
+from sigvue_examples.waterfall.analysis import _waterfall_spectrogram
+from sigvue_examples.waterfall.workspace import create_workspace
 from scripts.download_radio_astronomy import is_unpacked, md5, unpack
 from scripts.generate_minimal_sigmf import write_sigmf
 
 
 class WaterfallTests(unittest.TestCase):
-    def test_waterfall_rows_cover_the_entire_selected_buffer(self):
+    def test_waterfall_rows_cover_exact_full_fft_windows(self):
         waterfall, average, edges = _waterfall_spectrogram(
             np.ones(1_000, dtype=np.complex64),
             fft_size=10,
@@ -26,6 +27,25 @@ class WaterfallTests(unittest.TestCase):
         self.assertEqual((31,), edges.shape)
         self.assertEqual(0.0, edges[0])
         self.assertEqual(1_000.0, edges[-1])
+
+    def test_waterfall_ignores_a_partial_tail_instead_of_zero_padding_it(self):
+        sample_rate = 2_000_000.0
+        samples = np.exp(1j * 2 * np.pi * 200_000 * np.arange(40_000) / sample_rate)
+        waterfall, _, edges = _waterfall_spectrogram(
+            samples.astype(np.complex64),
+            fft_size=4_096,
+            maximum_rows=200,
+        )
+        self.assertEqual((18, 4_096), waterfall.shape)
+        self.assertEqual(38_912, edges[-1])
+        self.assertLess(edges[-1], samples.size)
+        np.testing.assert_allclose(
+            10 ** (waterfall[0] / 10),
+            10 ** (waterfall[-1] / 10),
+            rtol=2e-5,
+            atol=1e-14,
+        )
+        self.assertLess(float(np.min(waterfall)), -200.0)
 
     def test_windowed_waterfall_workspace_reads_sigmf_and_renders_spectrogram(self):
         with TemporaryDirectory() as directory:
@@ -66,6 +86,10 @@ class WaterfallTests(unittest.TestCase):
             controls = {control.name: control for control in opened.page.controls}
             self.assertEqual("colormap", controls["waterfall_colormap"].control_type)
             self.assertEqual("limits", controls["waterfall_dbfs_limits"].control_type)
+            self.assertEqual("Manual dBFS limits (Auto off)", controls["waterfall_dbfs_limits"].label)
+            self.assertEqual((-90.0, -20.0), controls["waterfall_dbfs_limits"].default)
+            self.assertEqual("Hann", controls["waterfall_fft_window"].default)
+            self.assertEqual(50, controls["waterfall_overlap_percent"].default)
             self.assertEqual("toggle", controls["waterfall_auto_dbfs_scale"].control_type)
             self.assertTrue(controls["waterfall_auto_dbfs_scale"].default)
             self.assertEqual("toggle", controls["waterfall_show_annotations"].control_type)
@@ -84,6 +108,7 @@ class WaterfallTests(unittest.TestCase):
                 "waterfall_maximum_time_bins": "50",
             })
             self.assertEqual(["scatter", "heatmap", "scatter", "scatter"], [trace.type for trace in figure.data])
+            self.assertEqual((-95.0, -15.0), tuple(figure.layout.yaxis.range))
             self.assertEqual((-95.0, -15.0), (figure.data[1].zmin, figure.data[1].zmax))
             self.assertEqual(figure.data[1].z.shape[0] + 1, len(figure.data[1].y))
             self.assertEqual(tuple(figure.layout.yaxis2.range), (figure.data[1].y[0], figure.data[1].y[-1]))
@@ -126,6 +151,15 @@ class WaterfallTests(unittest.TestCase):
             self.assertEqual(figure.layout.yaxis2.range, hidden.layout.yaxis2.range)
             self.assertNotEqual(figure.layout.uirevision, hidden.layout.uirevision)
 
+            restyled = opened.page.views[0].callback({
+                "waterfall_show_annotations": "false",
+                "waterfall_colormap": "Inferno",
+                "waterfall_fft_size": "1024",
+                "waterfall_maximum_time_bins": "50",
+            })
+            self.assertEqual(hidden.layout.yaxis.range, restyled.layout.yaxis.range)
+            self.assertNotEqual(hidden.layout.yaxis.uirevision, restyled.layout.yaxis.uirevision)
+
             moved = opened.page.views[0].callback({
                 "__window_start_seconds": "0.1",
                 "__window_end_seconds": "0.2",
@@ -133,7 +167,7 @@ class WaterfallTests(unittest.TestCase):
                 "waterfall_maximum_time_bins": "50",
             })
             self.assertNotEqual(figure.layout.yaxis2.uirevision, moved.layout.yaxis2.uirevision)
-            self.assertEqual((100.0, 200.0), tuple(moved.layout.yaxis2.range))
+            self.assertEqual((100.0, 197.28), tuple(moved.layout.yaxis2.range))
 
     def test_lte_workspace_uses_the_shared_sigmf_annotation_regions(self):
         with TemporaryDirectory() as directory:
@@ -146,11 +180,11 @@ class WaterfallTests(unittest.TestCase):
             metadata.pop("annotations", None)
             metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
-            opened = create_lte_workspace({"data_root": root}).open_item("lte")
+            opened = create_workspace({"data_root": root}).open_item("lte")
             self.assertIsNotNone(opened.page.annotation)
             self.assertEqual((), tuple(opened.page.annotation.discover_callback()))
             self.assertEqual(
-                "lte_annotation_region_color",
+                "waterfall_annotation_region_color",
                 opened.page.annotation.timeline_color_control,
             )
             created = opened.page.annotation.annotate_callback({}, AnnotationRequest(
@@ -171,7 +205,7 @@ class WaterfallTests(unittest.TestCase):
             self.assertEqual(tuple(figure.layout.yaxis2.range), (figure.data[1].y[0], figure.data[1].y[-1]))
             self.assertIn("LTE allocation", figure.data[-1].text[0])
             fields = {field.name: field for field in opened.page.annotation.fields}
-            self.assertEqual("lte-spectrum", fields["start_seconds"].plot_binding.view)
+            self.assertEqual("waterfall-spectrum", fields["start_seconds"].plot_binding.view)
             self.assertEqual("yaxis2", fields["start_seconds"].plot_binding.axis)
             self.assertEqual("xaxis2", fields["frequency_lower_hz"].plot_binding.axis)
 

@@ -8,7 +8,7 @@ import numpy as np
 from sigvue.core.plugin import AnalysisContext
 from sigvue.plugin import ExportRequest
 from sigvue.rendering.dispatch import RenderKind, detect_render_kind
-from sigvue_examples.radar_collection import (
+from sigvue_examples.radar.domain import (
     BufferedDelivery,
     CHANNEL_COLORS,
     COLORMAPS,
@@ -21,10 +21,12 @@ from sigvue_examples.radar_collection import (
     _linear_average_db,
     _products,
     configure_lfm,
-    create_workspace as create_live_workspace,
     present_lfm,
     process_lfm,
 )
+from sigvue_examples.radar.analysis import LfmAnalysis
+from sigvue_examples.radar.plots import LfmPresentation
+from sigvue_examples.radar.workspace import create_workspace as create_live_workspace
 
 
 def render_lfm(data: LfmInput, values: dict[str, str]) -> AnalysisContext:
@@ -38,9 +40,8 @@ def render_lfm(data: LfmInput, values: dict[str, str]) -> AnalysisContext:
 class RadarCollectionTests(unittest.TestCase):
     def test_live_workspace_uses_shared_buffered_pipeline(self):
         live = create_live_workspace({"data_root": Path("missing")})
-        self.assertIs(configure_lfm, live.configure)
-        self.assertIs(process_lfm, live.process)
-        self.assertIs(present_lfm, live.present)
+        self.assertIsInstance(live.analysis, LfmAnalysis)
+        self.assertIsInstance(live.presentation, LfmPresentation)
         self.assertIsInstance(live.delivery, BufferedDelivery)
         self.assertIn("10-mhz", live.metadata.tags)
         annotation_fields = {field.name: field for field in live.annotator.fields}

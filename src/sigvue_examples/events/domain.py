@@ -9,10 +9,9 @@ from pathlib import Path
 
 import plotly.graph_objects as go
 
-from sigvue.plugin import AnalysisWorkspace, DataDelivery, DataResource, DeliveryContext, DirectorySource, Segment, ViewContext
+from sigvue.plugin import DataResource, Delivery, DeliveryContext, Segment, ViewContext
 
-from .capabilities import SIGNAL_DISCOVERY_COLUMNS
-from .style import COLORS, style_figure
+from ..style import COLORS, style_figure
 
 
 @dataclass(frozen=True)
@@ -35,7 +34,7 @@ class AcousticEventCollection:
     events: tuple[StoredEventResults, ...]
 
 
-class StoredEventDelivery(DataDelivery[AcousticEventCollection, StoredEventResults]):
+class StoredEventDelivery(Delivery[AcousticEventCollection, StoredEventResults]):
     """Select one stored result; no signal processing occurs in the workspace."""
 
     def prepare(self, collection: AcousticEventCollection, ui: DeliveryContext) -> StoredEventResults:
@@ -84,28 +83,6 @@ def present(event: StoredEventResults, ui: ViewContext) -> None:
         ui.plot(style_figure(waveform, ui.theme, event.label), key="waveform")
     with ui.tab("Stored spectrum"):
         ui.plot(style_figure(spectrum, ui.theme, f"{event.label} spectrum"), key="spectrum")
-
-
-def create_workspace(config=None):
-    values = config or {}
-    root = Path(values.get("data_root", Path.cwd() / "data"))
-    return AnalysisWorkspace(
-        identifier="acoustic-events-segmented",
-        name="Acoustic Event Review",
-        description="Segmented mode: navigate irregular precomputed acoustic events and display stored results without reprocessing raw data.",
-        source=DirectorySource(
-            root,
-            pattern="acoustic-events.json",
-            loader=load_collection,
-            describe=describe_collection,
-        ),
-        delivery=StoredEventDelivery(),
-        process=process,
-        present=present,
-        category="acoustic monitoring",
-        tags=("segmented", "irregular events", "precomputed", "display-only"),
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
-    )
 
 
 def load_collection(path: Path) -> AcousticEventCollection:

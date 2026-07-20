@@ -2,26 +2,47 @@
 
 External, file-backed examples for [Sigvue](https://github.com/briday1/sigvue). This repository deliberately keeps the small examples independent from the browser framework.
 
-The package is organized by analysis domain: `waterfall.py` contains the LTE
-and radio-astronomy spectrum/waterfall workflows, `comms.py` contains QPSK and
-16-QAM, and `radar_collection.py` contains the shared LFM time/frequency
-workflow. `events.py` retains the independent acoustic result viewer.
+Each pipeline is a directory that can be copied as a unit:
 
-The shared modules do not define browser behavior. `sigmf.py` only parses SigMF
-metadata and reads requested sample ranges, while `style.py` only applies Plotly
-styling to figures. Each domain module owns its browser source, delivery mode,
-parameters, processing, tabs, and plots. This keeps the dependency direction
-simple: a workspace may use the SigMF reader, but the SigMF reader never knows
-about a workspace.
+```text
+src/sigvue_examples/
+├── comms/
+│   ├── source.py
+│   ├── delivery.py
+│   ├── analysis.py
+│   ├── plots.py
+│   ├── domain.py
+│   └── workspace.py
+├── events/
+├── waterfall/
+├── radar/
+├── io/sigmf/
+│   ├── recording.py
+│   └── capabilities.py
+└── style/
+    └── plotly.py
+```
 
-Each domain delivery explicitly implements the framework's typed interface—for
-example, `DataDelivery[SigMFRecording, WaterfallWindow]`. The first type is what
+Every `workspace.py` is the small framework boundary: it assembles a
+`Workspace` from that pipeline's `source`, `delivery`, `analysis`,
+`plots`, and optional `capabilities` modules. `domain.py` keeps the typed domain
+models and lower-level helpers that those focused modules expose. Cross-pipeline code is limited to
+`io/sigmf` for ranged file access and SigMF capabilities, and
+`style` for Plotly appearance. Neither shared package chooses tabs, playback
+mode, parameters, or analysis behavior.
+
+Each domain delivery explicitly subclasses the framework's typed `Delivery`—for
+example, `Delivery[SigMFRecording, WaterfallWindow]`. The first type is what
 the source opens, and the second is the value passed into workspace configuration
 and processing. This makes the source/delivery/processing boundary visible
-without putting browser semantics into the shared SigMF I/O module.
+without putting browser semantics into the shared SigMF I/O module. Workspace
+assembly uses framework objects for every behavioral slot: `Workspace`,
+`Source`, optional `Delivery`, `Analysis`, `Presentation`, optional `Annotator`,
+and optional `Exporter`. There are no alternate constructor names or
+structurally inferred lifecycle objects.
 
-`capabilities.py` is the explicit bridge from that neutral I/O to Sigvue's
-optional annotation and export contracts. These workspaces write standard
+`io/sigmf/capabilities.py` is the explicit bridge from that neutral I/O to Sigvue's
+optional `Annotator` and `Exporter` base objects. These workspaces write standard
 SigMF sample start/count, comment, generator, and UUID annotation fields. Waterfall
 workspaces also read and write standard lower/upper RF-frequency edges, populate editable
 bounds from the visible Plotly axes, and show in-view annotations as hoverable regions.
@@ -96,5 +117,10 @@ During development, installation of this repository is optional because `browser
 ## Test
 
 ```bash
-PYTHONPATH=src:../sigvue/src python -m unittest discover -s tests -q
+PYTHONPATH=src:../sigvue/src python -m pytest -q tests
 ```
+
+The repository workflow installs Sigvue from its `main` branch, installs this
+examples package without replacing that framework checkout, and runs the same
+suite on every push and pull request. This keeps the example implementations
+checked against the current public plugin contract.

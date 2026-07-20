@@ -43,7 +43,7 @@ data_root = "./data/radio-astronomy"
 filename = "*.sigmf-meta"
 
 [[workspaces]]
-use = "lte-recording"
+use = "waterfall"
 path = "."
 id = "lte-recordings"
 name = "LTE Recordings"
