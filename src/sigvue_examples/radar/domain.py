@@ -234,19 +234,19 @@ class BufferedDelivery(Delivery[LfmCollection, LfmInput]):
     def prepare(self, collection: LfmCollection, ui: DeliveryContext) -> LfmInput:
         default_pri = 1 / collection.ota_prf_hz
         buffer_seconds = ui.number("buffer_seconds", default=0.02, minimum=default_pri, maximum=0.1, step=default_pri)
-        processing_prf_hz = ui.number(
-            "processing_prf_hz",
-            label="Processing PRF (Hz)",
-            default=collection.ota_prf_hz,
-            minimum=1.0,
-            maximum=collection.sample_rate / 8,
-            step=1.0,
+        processing_pri_seconds = ui.number(
+            "processing_pri_seconds",
+            label="Processing PRI (s)",
+            default=default_pri,
+            minimum=8 / collection.sample_rate,
+            maximum=1.0,
+            step=default_pri / 10,
         )
         seek_seconds = ui.number("seek_seconds", default=0.01, minimum=0.001, step=0.001)
         refresh_seconds = ui.number("refresh_seconds", default=0.15, minimum=0.05, step=0.05)
         available = collection.sample_count("ota")
         size = min(available, max(1, round(buffer_seconds * collection.sample_rate)))
-        pri = min(size, max(8, round(collection.sample_rate / processing_prf_hz)))
+        pri = min(size, max(8, round(collection.sample_rate * processing_pri_seconds)))
         duration = max(0.0, (available - size) / collection.sample_rate)
         time = ui.playback(
             mode=self.playback_mode,
@@ -262,21 +262,21 @@ class BufferedDelivery(Delivery[LfmCollection, LfmInput]):
 class WholeFileDelivery(Delivery[LfmCollection, LfmInput]):
     """Framework policy for batch mode: deliver the complete OTA member files."""
 
-    def __init__(self, *, default_processing_prf_hz: float | None = None) -> None:
-        self.default_processing_prf_hz = default_processing_prf_hz
+    def __init__(self, *, default_processing_pri_seconds: float | None = None) -> None:
+        self.default_processing_pri_seconds = default_processing_pri_seconds
 
     def prepare(self, collection: LfmCollection, ui: DeliveryContext) -> LfmInput:
         ui.playback(mode="static")
-        default_prf_hz = self.default_processing_prf_hz or collection.ota_prf_hz
-        processing_prf_hz = ui.number(
-            "processing_prf_hz",
-            label="Processing PRF (Hz)",
-            default=default_prf_hz,
-            minimum=1.0,
-            maximum=collection.sample_rate / 8,
-            step=1.0,
+        default_pri_seconds = self.default_processing_pri_seconds or 1 / collection.ota_prf_hz
+        processing_pri_seconds = ui.number(
+            "processing_pri_seconds",
+            label="Processing PRI (s)",
+            default=default_pri_seconds,
+            minimum=8 / collection.sample_rate,
+            maximum=1.0,
+            step=default_pri_seconds / 10,
         )
-        pri = max(8, round(collection.sample_rate / processing_prf_hz))
+        pri = max(8, round(collection.sample_rate * processing_pri_seconds))
         return _input(collection, start=0, count=collection.sample_count("ota"), pri=pri, ui=ui)
 
 
@@ -568,34 +568,61 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
     )
 
     with ui.tab("Waterfall"):
+        waterfall_views = {
+            ("Fast-time power", "All"): _waterfall_figure(
+                products,
+                "time",
+                ui.theme,
+                waterfall_colormap,
+                time_waterfall_limits,
+                annotations=data.annotations,
+                window_start_seconds=data.start_sample / data.sample_rate,
+                annotation_style=annotation_style,
+                show_annotations=show_annotations,
+            ),
+            ("Frequency PSD", "All"): _waterfall_figure(
+                products,
+                "frequency",
+                ui.theme,
+                waterfall_colormap,
+                psd_waterfall_limits,
+                annotations=data.annotations,
+                window_start_seconds=data.start_sample / data.sample_rate,
+                annotation_style=annotation_style,
+                show_annotations=show_annotations,
+            ),
+        }
+        for channel in range(4):
+            channel_label = f"Ch{channel + 1}"
+            waterfall_views[("Fast-time power", channel_label)] = _waterfall_figure(
+                products,
+                "time",
+                ui.theme,
+                waterfall_colormap,
+                time_waterfall_limits,
+                annotations=data.annotations,
+                window_start_seconds=data.start_sample / data.sample_rate,
+                annotation_style=annotation_style,
+                show_annotations=show_annotations,
+                selected_channel=channel,
+            )
+            waterfall_views[("Frequency PSD", channel_label)] = _waterfall_figure(
+                products,
+                "frequency",
+                ui.theme,
+                waterfall_colormap,
+                psd_waterfall_limits,
+                annotations=data.annotations,
+                window_start_seconds=data.start_sample / data.sample_rate,
+                annotation_style=annotation_style,
+                show_annotations=show_annotations,
+                selected_channel=channel,
+            )
         ui.view_switcher(
-            "Domain",
-            {
-                "Fast-time power": _waterfall_figure(
-                    products,
-                    "time",
-                    ui.theme,
-                    waterfall_colormap,
-                    time_waterfall_limits,
-                    annotations=data.annotations,
-                    window_start_seconds=data.start_sample / data.sample_rate,
-                    annotation_style=annotation_style,
-                    show_annotations=show_annotations,
-                ),
-                "Frequency PSD": _waterfall_figure(
-                    products,
-                    "frequency",
-                    ui.theme,
-                    waterfall_colormap,
-                    psd_waterfall_limits,
-                    annotations=data.annotations,
-                    window_start_seconds=data.start_sample / data.sample_rate,
-                    annotation_style=annotation_style,
-                    show_annotations=show_annotations,
-                ),
-            },
+            ("Domain", "Channels"),
+            waterfall_views,
             key="waterfall-domain",
-            selector="buttons",
+            selector=("buttons", "dropdown"),
             axis_navigation="bounded",
         )
     with ui.tab("Time Domain"):
@@ -668,8 +695,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
 
     ui.stat("Samples delivered", f"{data.ota_counts.shape[1]:,}")
     ui.stat("Duration delivered", f"{data.ota_counts.shape[1] / data.sample_rate:g} s")
-    ui.stat("Processing PRF", f"{data.sample_rate / data.pri_samples:g} Hz")
-    ui.stat("PRI", f"{data.pri_samples / data.sample_rate:g} s")
+    ui.stat("Processing PRI", f"{data.pri_samples / data.sample_rate:g} s")
     ui.stat("Sample rate", f"{data.sample_rate / 1e6:g} MHz")
 
 
@@ -826,6 +852,24 @@ def _db10(value: Any) -> np.ndarray:
     return 10 * np.log10(np.maximum(value, 1e-30))
 
 
+def _legend_inside_top_temporal_plot(figure: go.Figure, theme: str) -> go.Figure:
+    """Keep calibration legends inside the upper time-domain subplot."""
+    dark = theme == "dark"
+    figure.update_layout(
+        legend={
+            "orientation": "h",
+            "x": 0.01,
+            "y": 0.99,
+            "xanchor": "left",
+            "yanchor": "top",
+            "bgcolor": "rgba(16,37,45,0.78)" if dark else "rgba(255,255,255,0.82)",
+            "bordercolor": "#36515b" if dark else "#dce5e8",
+            "borderwidth": 1,
+        }
+    )
+    return figure
+
+
 def _phase_figure(
     counts: np.ndarray,
     calibration: Calibration,
@@ -849,11 +893,14 @@ def _phase_figure(
         figure.add_trace(go.Scatter(x=time_us, y=np.unwrap(np.angle(subset[channel])), name=name, line=line, showlegend=False), row=2, col=1)
         figure.add_trace(go.Scatter(x=time_us, y=np.unwrap(np.angle(aligned[channel])), name=name, line=line, showlegend=False), row=2, col=2)
     figure.update_xaxes(title_text="Time (us)")
-    return style_plotly(
-        figure,
-        title=f"Phase calibration · reference Channel {calibration.phase_reference_channel + 1}",
-        theme=theme,
-        boxed_axes=True,
+    return _legend_inside_top_temporal_plot(
+        style_plotly(
+            figure,
+            title=f"Phase calibration · reference Channel {calibration.phase_reference_channel + 1}",
+            theme=theme,
+            boxed_axes=True,
+        ),
+        theme,
     )
 
 
@@ -879,11 +926,14 @@ def _amplitude_figure(
     figure.add_trace(go.Scatter(x=[time_us[0], time_us[-1]], y=[data.calibration_dbm] * 2, name="Incident power", line={"color": ORANGE, "dash": "dash"}), row=1, col=1)
     figure.update_xaxes(title_text="Time (us)", row=1, col=1)
     figure.update_xaxes(title_text="Frequency (Hz)", row=2, col=1)
-    return style_plotly(
-        figure,
-        title=f"Amplitude calibration · reference {calibration.amplitude_reference_label}",
-        theme=theme,
-        boxed_axes=True,
+    return _legend_inside_top_temporal_plot(
+        style_plotly(
+            figure,
+            title=f"Amplitude calibration · reference {calibration.amplitude_reference_label}",
+            theme=theme,
+            boxed_axes=True,
+        ),
+        theme,
     )
 
 
@@ -910,7 +960,10 @@ def _noise_figure(
         figure.add_trace(go.Scatter(x=[-data.sample_rate / 2, data.sample_rate / 2], y=[calibration.noise_psd_dbm_hz[channel]] * 2, name=f"Ch {channel + 1} measured floor", line={"dash": "dot"}), row=2, col=1)
     figure.update_xaxes(title_text="Time (us)", row=1, col=1)
     figure.update_xaxes(title_text="Frequency (Hz)", row=2, col=1)
-    return style_plotly(figure, title="Terminated-noise calibration", theme=theme, boxed_axes=True)
+    return _legend_inside_top_temporal_plot(
+        style_plotly(figure, title="Terminated-noise calibration", theme=theme, boxed_axes=True),
+        theme,
+    )
 
 
 def _single_psd(samples: np.ndarray, rate: float) -> tuple[np.ndarray, np.ndarray]:
@@ -952,15 +1005,18 @@ def _waterfall_figure(
     window_start_seconds: float = 0.0,
     annotation_style: TraceStyle | None = None,
     show_annotations: bool = True,
+    selected_channel: int | None = None,
 ) -> go.Figure:
+    channels = tuple(range(4)) if selected_channel is None else (selected_channel,)
+    tiled = selected_channel is None
     figure = make_subplots(
-        rows=2,
-        cols=2,
-        shared_xaxes="all",
-        shared_yaxes="all",
-        subplot_titles=[f"Channel {channel + 1}" for channel in range(4)],
+        rows=2 if tiled else 1,
+        cols=2 if tiled else 1,
+        shared_xaxes="all" if tiled else False,
+        shared_yaxes="all" if tiled else False,
+        subplot_titles=[f"Channel {channel + 1}" for channel in channels],
     )
-    for channel in range(4):
+    for display_index, channel in enumerate(channels):
         if domain == "time":
             x, z, title = products.fast_time_us, products.time_waterfall_dbm[channel], "Power (dBm)"
         else:
@@ -973,11 +1029,11 @@ def _waterfall_figure(
                 zmin=zlimits[0],
                 zmax=zlimits[1],
                 colorscale=colormap,
-                showscale=channel == 3,
+                showscale=display_index == len(channels) - 1,
                 colorbar={"title": title},
             ),
-            row=channel // 2 + 1,
-            col=channel % 2 + 1,
+            row=display_index // 2 + 1 if tiled else 1,
+            col=display_index % 2 + 1 if tiled else 1,
         )
     displayed_slow_times = np.sort(np.asarray(products.slow_time_s, dtype=float))
     slow_time_edges = np.asarray(products.slow_time_edges_s, dtype=float)
@@ -1032,8 +1088,9 @@ def _waterfall_figure(
             hover_y.extend(((y0 + y1) / 2,) * 3)
             hover_text.extend((hover,) * 3)
         if polygon_x:
-            for channel in range(4):
-                row, col = channel // 2 + 1, channel % 2 + 1
+            for display_index, channel in enumerate(channels):
+                row = display_index // 2 + 1 if tiled else 1
+                col = display_index % 2 + 1 if tiled else 1
                 figure.add_trace(
                     go.Scatter(
                         x=polygon_x,
@@ -1067,23 +1124,28 @@ def _waterfall_figure(
         range=[slow_time_start, slow_time_stop],
         autorange=False,
         uirevision=f"radar-waterfall-time:{slow_time_start:.12g}:{slow_time_stop:.12g}",
-        col=1,
+        col=1 if tiled else None,
     )
-    figure.update_yaxes(
-        range=[slow_time_start, slow_time_stop],
-        autorange=False,
-        uirevision=f"radar-waterfall-time:{slow_time_start:.12g}:{slow_time_stop:.12g}",
-        col=2,
-    )
+    if tiled:
+        figure.update_yaxes(
+            range=[slow_time_start, slow_time_stop],
+            autorange=False,
+            uirevision=f"radar-waterfall-time:{slow_time_start:.12g}:{slow_time_stop:.12g}",
+            col=2,
+        )
     figure.update_xaxes(
         range=[x_start, x_stop],
         autorange=False,
         uirevision=f"radar-waterfall-{domain}:{x_start:.12g}:{x_stop:.12g}",
     )
-    figure.update_xaxes(title_text="Fast time (us)" if domain == "time" else "Frequency (Hz)", row=2)
+    figure.update_xaxes(
+        title_text="Fast time (us)" if domain == "time" else "Frequency (Hz)",
+        row=2 if tiled else 1,
+    )
     return style_plotly(
         figure,
-        title="Fast-time power waterfall" if domain == "time" else "Frequency PSD waterfall",
+        title=("Fast-time power waterfall" if domain == "time" else "Frequency PSD waterfall")
+        + ("" if tiled else f" · Channel {selected_channel + 1}"),
         theme=theme,
         boxed_axes=True,
     )

@@ -51,31 +51,32 @@ class RadarCollectionTests(unittest.TestCase):
         self.assertIn("2-mhz", live.metadata.tags)
         self.assertIn("multi-target", live.metadata.tags)
 
-    def test_whole_file_delivery_has_only_processing_prf_and_returns_all_samples(self):
+    def test_whole_file_delivery_has_only_processing_pri_and_returns_all_samples(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
             ui = AnalysisContext({})
-            delivered = WholeFileDelivery(default_processing_prf_hz=100).prepare(collection, ui)
+            delivered = WholeFileDelivery(default_processing_pri_seconds=0.01).prepare(collection, ui)
             self.assertEqual((4, 1_000), delivered.ota_counts.shape)
             self.assertEqual(10, delivered.pri_samples)
-            self.assertEqual(["processing_prf_hz"], [control.name for control in ui.controls])
+            self.assertEqual(["processing_pri_seconds"], [control.name for control in ui.controls])
+            self.assertEqual("Processing PRI (s)", ui.controls[0].label)
             self.assertEqual("static", ui.playback_config.mode)
 
     def test_buffered_delivery_owns_playback_and_returns_only_window(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            ui = AnalysisContext({"buffer_seconds": "0.1", "processing_prf_hz": "100", "__playback_time_seconds": "0.4"})
+            ui = AnalysisContext({"buffer_seconds": "0.1", "processing_pri_seconds": "0.01", "__playback_time_seconds": "0.4"})
             delivered = BufferedDelivery().prepare(collection, ui)
             self.assertEqual((4, 100), delivered.ota_counts.shape)
             self.assertEqual(400, delivered.start_sample)
             self.assertEqual(10, delivered.pri_samples)
-            self.assertEqual(["buffer_seconds", "processing_prf_hz", "seek_seconds", "refresh_seconds"], [control.name for control in ui.controls])
+            self.assertEqual(["buffer_seconds", "processing_pri_seconds", "seek_seconds", "refresh_seconds"], [control.name for control in ui.controls])
             self.assertEqual("live", ui.playback_config.mode)
 
     def test_buffered_delivery_can_expose_seek_without_live_controls(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            ui = AnalysisContext({"buffer_seconds": "0.1", "processing_prf_hz": "100"})
+            ui = AnalysisContext({"buffer_seconds": "0.1", "processing_pri_seconds": "0.01"})
             BufferedDelivery(playback_mode="seek").prepare(collection, ui)
             self.assertEqual("seek", ui.playback_config.mode)
 
@@ -85,25 +86,25 @@ class RadarCollectionTests(unittest.TestCase):
             collection = self._collection(root, sample_count=100)
             delivered = BufferedDelivery().prepare(
                 collection,
-                AnalysisContext({"buffer_seconds": "0.02", "processing_prf_hz": "100"}),
+                AnalysisContext({"buffer_seconds": "0.02", "processing_pri_seconds": "0.01"}),
             )
             target = LfmExporter().export(
                 collection,
                 delivered,
-                ExportRequest("buffer", "json", {"processing_prf_hz": 100}),
+                ExportRequest("buffer", "json", {"processing_pri_seconds": 0.01}),
                 root,
             )
             payload = json.loads(target.read_text())
             self.assertEqual({"calibration", "terminated_noise", "ota"}, set(payload["samples"]))
             self.assertEqual(20, len(payload["samples"]["ota"]["real"][0]))
-            self.assertEqual(100, payload["control_values"]["processing_prf_hz"])
+            self.assertEqual(0.01, payload["control_values"]["processing_pri_seconds"])
 
     def test_live_tail_rechecks_common_file_growth_and_preserves_historical_seek(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
             live_values = {
                 "buffer_seconds": "0.1",
-                "processing_prf_hz": "100",
+                "processing_pri_seconds": "0.01",
                 "__playback_follow_live": "true",
             }
             initial_ui = AnalysisContext(live_values)
@@ -124,10 +125,10 @@ class RadarCollectionTests(unittest.TestCase):
             )
             self.assertEqual(400, historical.start_sample)
 
-    def test_processing_prf_changes_whole_file_reshape_without_changing_data(self):
+    def test_processing_pri_changes_whole_file_reshape_without_changing_data(self):
         with TemporaryDirectory() as directory:
             collection = self._collection(Path(directory), sample_count=1_000)
-            delivered = WholeFileDelivery().prepare(collection, AnalysisContext({"processing_prf_hz": "50"}))
+            delivered = WholeFileDelivery().prepare(collection, AnalysisContext({"processing_pri_seconds": "0.02"}))
             self.assertEqual((4, 1_000), delivered.ota_counts.shape)
             self.assertEqual(20, delivered.pri_samples)
 
@@ -239,6 +240,11 @@ class RadarCollectionTests(unittest.TestCase):
         names = [trace.name or "" for trace in changed.figures["noise-plot"].data]
         self.assertNotIn("Expected noise PSD", names)
         self.assertEqual(4, sum("measured floor" in name for name in names))
+        for key in ("phase-plot", "amplitude-plot", "noise-plot"):
+            legend = changed.figures[key].layout.legend
+            self.assertEqual((0.01, 0.99), (legend.x, legend.y))
+            self.assertEqual(("left", "top"), (legend.xanchor, legend.yanchor))
+            self.assertEqual("h", legend.orientation)
         self.assertEqual(
             "Reference noise PSD (dBm/Hz)",
             next(control for control in inline if control.name == "reference_noise_psd_dbm_hz").label,
@@ -265,6 +271,13 @@ class RadarCollectionTests(unittest.TestCase):
         self.assertEqual("Plasma", waterfall_controls[0].default)
         self.assertEqual((-100.0, -10.0), waterfall_controls[1].default)
         self.assertEqual((-180.0, -80.0), waterfall_controls[2].default)
+        waterfall_switcher = changed.tabs[0].nodes[0]
+        self.assertEqual(("Domain", "Channels"), waterfall_switcher.props["labels"])
+        self.assertEqual(("buttons", "dropdown"), waterfall_switcher.props["selectors"])
+        self.assertEqual(
+            (("Fast-time power", "Frequency PSD"), ("All", "Ch1", "Ch2", "Ch3", "Ch4")),
+            waterfall_switcher.props["options"],
+        )
         for trace in changed.figures["waterfall-domain-0"].data:
             self.assertEqual((-100.0, -10.0), (trace.zmin, trace.zmax))
             self.assertEqual("#0d0887", trace.colorscale[0][1])
@@ -283,6 +296,14 @@ class RadarCollectionTests(unittest.TestCase):
         for trace in customized.figures["waterfall-domain-1"].data:
             self.assertEqual((-175.0, -95.0), (trace.zmin, trace.zmax))
             self.assertEqual("#00224e", trace.colorscale[0][1])
+
+        for key in ("waterfall-domain-4", "waterfall-domain-5"):
+            figure = changed.figures[key]
+            heatmaps = [trace for trace in figure.data if trace.type == "heatmap"]
+            self.assertEqual(1, len(heatmaps))
+            self.assertEqual(1, len(list(figure.select_xaxes())))
+            self.assertEqual(1, len(list(figure.select_yaxes())))
+            self.assertIn("Channel 2", figure.layout.title.text)
 
         for key in ("time-view-0", "frequency-view-0"):
             self.assert_axes_share_range(changed.figures[key], "x")
