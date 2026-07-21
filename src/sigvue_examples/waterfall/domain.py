@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from io import BytesIO
 import json
 from pathlib import Path
 
 import numpy as np
+import plotly.colors as plotly_colors
 import plotly.graph_objects as go
+from PIL import Image
 from plotly.subplots import make_subplots
 
 from sigvue.plugin import (
@@ -36,6 +40,116 @@ from ..style import style_figure
 
 
 COLORMAPS = ("Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo", "Blues", "Greens", "Hot", "Jet")
+
+_RASTER_LUT_SIZE = 256
+
+
+def _colorscale_lut(colorscale: str) -> np.ndarray:
+    """Return a 256-entry RGB lookup table for a Plotly colorscale."""
+    colors = plotly_colors.sample_colorscale(
+        colorscale,
+        np.linspace(0.0, 1.0, _RASTER_LUT_SIZE),
+        colortype="rgb",
+    )
+    return np.asarray(
+        [plotly_colors.unlabel_rgb(color) for color in colors],
+        dtype=np.uint8,
+    )
+
+
+def _waterfall_png_uri(
+    values: np.ndarray,
+    *,
+    zmin: float,
+    zmax: float,
+    colorscale: str,
+) -> str:
+    """Color-map a waterfall once in NumPy and encode it as a fast PNG."""
+    z = np.asarray(values)
+    if z.ndim != 2:
+        raise ValueError(f"Expected a 2-D waterfall, received shape {z.shape}")
+
+    zmin = float(zmin)
+    zmax = float(zmax)
+    if not np.isfinite(zmin) or not np.isfinite(zmax) or zmax <= zmin:
+        raise ValueError(
+            f"Expected finite zmax > zmin, received zmin={zmin}, zmax={zmax}"
+        )
+
+    finite = np.isfinite(z)
+    scaled = np.zeros(z.shape, dtype=np.float32)
+    np.subtract(z, zmin, out=scaled, where=finite)
+    scaled *= (_RASTER_LUT_SIZE - 1) / (zmax - zmin)
+    np.clip(scaled, 0.0, _RASTER_LUT_SIZE - 1, out=scaled)
+
+    indices = np.rint(scaled).astype(np.uint8)
+    rgb = _colorscale_lut(colorscale)[indices]
+
+    # Heatmap row zero is at the low end of an ascending y axis. Raster row
+    # zero is displayed at the top, so flip vertically.
+    rgb = np.ascontiguousarray(np.flipud(rgb))
+
+    buffer = BytesIO()
+    Image.fromarray(rgb, mode="RGB").save(
+        buffer,
+        format="PNG",
+        compress_level=1,
+        optimize=False,
+    )
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _rasterize_heatmap_after_styling(
+    figure: go.Figure,
+    *,
+    trace_index: int,
+    values: np.ndarray,
+    x_bounds: tuple[float, float],
+    y_bounds: tuple[float, float],
+    zmin: float,
+    zmax: float,
+    colorscale: str,
+) -> go.Figure:
+    """Replace one styled Heatmap payload with a raster without changing layout."""
+    source = _waterfall_png_uri(
+        values,
+        zmin=zmin,
+        zmax=zmax,
+        colorscale=colorscale,
+    )
+
+    trace = figure.data[trace_index]
+    xref = trace.xaxis or "x"
+    yref = trace.yaxis or "y"
+    xmin, xmax = map(float, x_bounds)
+    ymin, ymax = map(float, y_bounds)
+
+    figure.add_layout_image(
+        source=source,
+        xref=xref,
+        yref=yref,
+        x=xmin,
+        y=ymax,
+        sizex=xmax - xmin,
+        sizey=ymax - ymin,
+        xanchor="left",
+        yanchor="top",
+        sizing="stretch",
+        opacity=1.0,
+        layer="below",
+    )
+
+    # Preserve the original trace object, subplot assignment, colorscale, and
+    # colorbar. Replace only the expensive matrix with a transparent 2x2 trace.
+    trace.x = [xmin, xmax]
+    trace.y = [ymin, ymax]
+    trace.z = [[zmin, zmax], [zmin, zmax]]
+    trace.opacity = 0.0
+    trace.hoverinfo = "skip"
+    trace.hovertemplate = None
+
+    return figure
 
 
 def _rgba(color: str, alpha: float) -> str:
@@ -721,7 +835,29 @@ def _waterfall_channel_figure(
         col=1,
         time_coordinates_are_edges=True,
     )
-    return style_figure(figure, theme, f"{products.label} · spectrum and waterfall")
+
+    # Let the existing style/layout code see the exact original figure first.
+    # This preserves the plot window, subplot domains, explicit axis limits,
+    # selection surface, and annotation overlays.
+    figure = style_figure(
+        figure,
+        theme,
+        f"{products.label} · spectrum and waterfall",
+    )
+
+    # Only after styling replace the large Heatmap payload with a raster.
+    # Trace index 1 is the waterfall; all later traces remain interactive
+    # annotation or selection overlays.
+    return _rasterize_heatmap_after_styling(
+        figure,
+        trace_index=1,
+        values=displayed_waterfall_dbfs,
+        x_bounds=products.frequency_bounds_mhz,
+        y_bounds=products.time_bounds_ms,
+        zmin=float(zmin),
+        zmax=float(zmax),
+        colorscale=colormap,
+    )
 
 
 def _rounded_limits(lower: float, upper: float, *, minimum_span: float = 10.0) -> tuple[float, float]:

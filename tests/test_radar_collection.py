@@ -157,6 +157,38 @@ class RadarCollectionTests(unittest.TestCase):
             (products.slow_time_edges_s[:-1] + products.slow_time_edges_s[1:]) / 2,
         )
 
+    def test_lfm_rendering_resolution_is_user_configurable(self):
+        samples = np.ones((4, 16_384), dtype=np.complex64) * (100 + 25j)
+        data = LfmInput(
+            sample_rate=10_000_000.0,
+            calibration_dbm=-20.0,
+            adc_bits=16,
+            pri_samples=512,
+            start_sample=0,
+            calibration_counts=samples[:, :512],
+            noise_counts=samples[:, :512] * 0.01,
+            ota_counts=samples,
+        )
+
+        ui = AnalysisContext({
+            "slow_time_points": "8",
+            "fast_time_points": "64",
+            "frequency_points": "32",
+        })
+        settings = configure_lfm(data, ui)
+        products = process_lfm(data, settings).signal
+
+        self.assertLessEqual(products.slow_time_s.size, 8)
+        self.assertLessEqual(products.fast_time_us.size, 64)
+        self.assertLessEqual(products.frequencies_hz.size, 32)
+        resolution = [control for control in ui.controls if control.group == "Rendering resolution"]
+        self.assertEqual(
+            ["slow_time_points", "fast_time_points", "frequency_points"],
+            [control.name for control in resolution],
+        )
+        self.assertEqual([128, 256, 256], [control.default for control in resolution])
+        self.assertTrue(all(control.placement == "details" for control in resolution))
+
     def test_full_pri_psd_is_invariant_to_circular_fast_time_shift(self):
         pri = 1_024
         pulse = np.zeros(pri, dtype=np.complex64)

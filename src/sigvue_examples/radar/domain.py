@@ -395,6 +395,9 @@ class LfmSettings:
     phase_reference: str
     amplitude_reference: str
     reference_noise_psd_dbm_hz: float
+    slow_time_points: int
+    fast_time_points: int
+    frequency_points: int
 
 
 @dataclass(frozen=True)
@@ -452,11 +455,38 @@ def configure_lfm(data: LfmInput, ui: ParameterContext) -> LfmSettings:
             group="Calibration parameters",
         )
     )
+    slow_time_points = ui.render_points(
+            "slow_time_points",
+            label="Waterfall rows",
+            default=128,
+            minimum=8,
+            maximum=4096,
+            step=8,
+    )
+    fast_time_points = ui.render_points(
+            "fast_time_points",
+            label="Fast-time points",
+            default=256,
+            minimum=16,
+            maximum=16384,
+            step=16,
+    )
+    frequency_points = ui.render_points(
+            "frequency_points",
+            label="Frequency points",
+            default=256,
+            minimum=16,
+            maximum=16384,
+            step=16,
+    )
     return LfmSettings(
         adc_bits=adc_bits,
         phase_reference=phase_reference,
         amplitude_reference=amplitude_reference,
         reference_noise_psd_dbm_hz=reference_noise_psd_dbm_hz,
+        slow_time_points=slow_time_points,
+        fast_time_points=fast_time_points,
+        frequency_points=frequency_points,
     )
 
 
@@ -470,7 +500,15 @@ def process_lfm(data: LfmInput, settings: LfmSettings) -> LfmAnalysisProducts:
     ota = _apply_calibration(data.ota_counts, calibration)
     calibrated_tone = _apply_calibration(data.calibration_counts, calibration)
     calibrated_noise = data.noise_counts * calibration.volts_per_count[:, None]
-    signal = _products(ota, data.sample_rate, data.pri_samples, data.start_sample)
+    signal = _products(
+        ota,
+        data.sample_rate,
+        data.pri_samples,
+        data.start_sample,
+        max_rows=settings.slow_time_points,
+        max_fast_time_bins=settings.fast_time_points,
+        max_frequency_bins=settings.frequency_points,
+    )
     phase_rows = [
         {
             "Channel": channel + 1,
@@ -654,7 +692,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                     ui.place_parameters("phase_reference", label="Calibration parameters")
                     ui.table(results.phase_rows, key="phase-diagnostics", depends_on=("phase_reference",))
                 ui.plot(
-                    _phase_figure(data.calibration_counts, calibration, data.sample_rate, ui.theme),
+                    lambda: _phase_figure(data.calibration_counts, calibration, data.sample_rate, ui.theme),
                     key="phase-plot",
                     depends_on=("phase_reference",),
                 )
@@ -676,7 +714,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                         depends_on=("amplitude_reference", "adc_bits"),
                     )
                 ui.plot(
-                    _amplitude_figure(results.calibrated_tone, data, calibration, ui.theme),
+                    lambda: _amplitude_figure(results.calibrated_tone, data, calibration, ui.theme),
                     key="amplitude-plot",
                     depends_on=("amplitude_reference", "adc_bits"),
                 )
@@ -689,7 +727,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                         depends_on=("reference_noise_psd_dbm_hz",),
                     )
                 ui.plot(
-                    _noise_figure(results.calibrated_noise, data, calibration, ui.theme),
+                    lambda: _noise_figure(results.calibrated_noise, data, calibration, ui.theme),
                     key="noise-plot",
                 )
 
@@ -697,6 +735,9 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
     ui.stat("Duration delivered", f"{data.ota_counts.shape[1] / data.sample_rate:g} s")
     ui.stat("Processing PRI", f"{data.pri_samples / data.sample_rate:g} s")
     ui.stat("Sample rate", f"{data.sample_rate / 1e6:g} MHz")
+    ui.stat("Waterfall rows", f"{products.slow_time_s.size:,}")
+    ui.stat("Fast-time points", f"{products.fast_time_us.size:,}")
+    ui.stat("Frequency points", f"{products.frequencies_hz.size:,}")
 
 
 def _calibrate(

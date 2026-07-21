@@ -58,7 +58,7 @@ menu.
 - **Acoustic Event Review** — navigate irregular markers and display waveform and spectrum products already stored in a JSON results file; the workspace performs no raw-audio processing.
 - **Radio Astronomy RFI Survey** — inspect real SigMF recordings from an Allen Telescope Array site survey using a sparse full-record power overview and a windowed spectrum/waterfall view.
 - **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset, then drag a window over its sliding-median power overview and inspect the selected time-frequency region.
-- **LFM Live View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface.
+- **LFM Live View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface. The Details panel exposes user-controlled waterfall-row, fast-time-point, and frequency-point limits. These limits are applied while analysis products are built, before Plotly figures or JSON payloads exist; lower values make live updates cheaper and may be raised whenever more display resolution is needed.
 - **Radar Data · Generic Waterfall** — point the reusable waterfall workspace at those same SigMF collection manifests, then choose any calibration, terminated-noise, or OTA channel from a dropdown without adding radar-specific plotting code.
 
 Every workspace is backed by files, but generated data is not committed.
