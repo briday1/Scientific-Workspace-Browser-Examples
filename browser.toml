@@ -61,16 +61,3 @@ id = "lfm-live"
 name = "LFM Live View"
 [workspaces.config]
 data_root = "./data/lfm-live"
-
-[[workspaces]]
-use = "waterfall"
-path = "."
-id = "radar-waterfall"
-name = "Radar Data · Generic Waterfall"
-description = "Windowed generic waterfall review of every calibration, terminated-noise, and OTA member in each radar SigMF collection."
-category = "signal analysis"
-tags = ["windowed", "radar", "LFM", "sigmf", "collection", "generic waterfall", "reuse"]
-[workspaces.config]
-data_root = "./data/lfm-live"
-source_type = "collection"
-filename = "*.sigmf-collection"

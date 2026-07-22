@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -50,15 +51,21 @@ def annotation_fields() -> tuple[AnnotationField, ...]:
     return (AnnotationField("comment", "Description / comment", "textarea", required=True),)
 
 
-def read_sigmf_annotations(recording: SigMFRecording) -> tuple[Annotation, ...]:
+@lru_cache(maxsize=64)
+def _read_sigmf_annotations_cached(
+    metadata_path: str,
+    modified_ns: int,
+    size: int,
+    sample_rate: float,
+) -> tuple[Annotation, ...]:
     result = []
-    for index, entry in enumerate(annotations(recording.metadata_path)):
+    for index, entry in enumerate(annotations(Path(metadata_path))):
         start = int(entry["core:sample_start"])
         count = entry.get("core:sample_count")
         result.append(Annotation(
             identifier=str(entry.get("core:uuid") or f"{start}:{index}"),
-            start_seconds=start / recording.sample_rate,
-            duration_seconds=None if count is None else int(count) / recording.sample_rate,
+            start_seconds=start / sample_rate,
+            duration_seconds=None if count is None else int(count) / sample_rate,
             label=str(entry["core:label"]) if entry.get("core:label") else None,
             comment=str(entry.get("core:comment") or "") or None,
             frequency_lower_hz=(
@@ -73,6 +80,16 @@ def read_sigmf_annotations(recording: SigMFRecording) -> tuple[Annotation, ...]:
             ),
         ))
     return tuple(result)
+
+
+def read_sigmf_annotations(recording: SigMFRecording) -> tuple[Annotation, ...]:
+    stat = recording.metadata_path.stat()
+    return _read_sigmf_annotations_cached(
+        str(recording.metadata_path.resolve()),
+        stat.st_mtime_ns,
+        stat.st_size,
+        recording.sample_rate,
+    )
 
 
 def add_sigmf_annotation(

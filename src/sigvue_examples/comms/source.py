@@ -1,17 +1,17 @@
-"""File discovery and opening for the communications pipeline."""
+"""Bind the shared SigMF reader to communications dataset discovery."""
 
 from pathlib import Path
 
 from sigvue.plugin import DirectorySource
 
-from ..io.sigmf.recording import load_recording
-from .domain import _describe_recording
+from ..io.sigmf import describe_recording, load_recording
 
 
-def recording_source(root: Path) -> DirectorySource:
+def recording_source(root: Path, pattern: str = "synthetic-*.sigmf-meta") -> DirectorySource:
     return DirectorySource(
         root,
-        pattern="*.sigmf-meta",
+        pattern=pattern,
         loader=lambda path: load_recording(path, sample_rate_fallback=1.0),
-        describe=_describe_recording,
+        describe=describe_recording,
+        recursive=True,
     )

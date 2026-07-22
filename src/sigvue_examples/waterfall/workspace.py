@@ -1,37 +1,36 @@
-"""Workspace assembly for the reusable SigMF waterfall pipeline."""
+"""The only module that assembles framework objects for this pipeline."""
 
 from pathlib import Path
 
-from sigvue.plugin import Workspace
+from sigvue.plugin import DiscoveryColumn, Workspace
 
-from ..io.sigmf.capabilities import SIGNAL_DISCOVERY_COLUMNS
+from ..io.sigmf.capabilities import WaterfallSigMFAnnotator
 from .analysis import WaterfallAnalysis
-from .batch import WaterfallBatch
-from .capabilities import waterfall_capabilities
-from .delivery import WindowedWaterfallDelivery
+from .delivery import WindowedSamples
 from .plots import WaterfallPresentation
-from .source import waterfall_source
+from .source import recording_source
+
+
+DISCOVERY_COLUMNS = (
+    DiscoveryColumn("date", "Date", "datetime"),
+    DiscoveryColumn("sample_rate", "Sampling rate", "si", unit="sample/s"),
+    DiscoveryColumn("rf_frequency", "RF frequency", "si", unit="Hz"),
+)
 
 
 def create_workspace(config=None) -> Workspace:
     values = config or {}
-    root = Path(values.get("data_root", Path.cwd() / "data"))
-    filename = str(values.get("filename", "*.sigmf-meta"))
-    source_type = str(values.get("source_type", "recording"))
-    source, is_collection = waterfall_source(root, filename, source_type)
-    annotator, exporter = waterfall_capabilities(is_collection)
+    root = Path(values.get("data_root", Path.cwd() / "data/lte"))
     return Workspace(
-        identifier="waterfall",
-        name="Waterfall",
-        description="Windowed mode: inspect a SigMF recording as an average spectrum and waterfall.",
-        source=source,
-        delivery=WindowedWaterfallDelivery(),
-        annotator=annotator,
-        exporter=exporter,
-        batch=WaterfallBatch(Path(values.get("output_root", root / "sigvue-output"))),
+        identifier="synthetic-lte-waterfall",
+        name="Synthetic LTE Waterfall",
+        description="Windowed spectrum and waterfall analysis of generated LTE-like uplink and downlink SigMF recordings.",
+        source=recording_source(root),
+        annotator=WaterfallSigMFAnnotator("lte-waterfall", "annotation_region_color"),
+        delivery=WindowedSamples(),
         analysis=WaterfallAnalysis(),
         presentation=WaterfallPresentation(),
         category="spectrum monitoring",
-        tags=("windowed", "sigmf", "spectrogram", "waterfall"),
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
+        tags=("windowed", "synthetic", "LTE", "SigMF", "waterfall"),
+        discovery_columns=DISCOVERY_COLUMNS,
     )

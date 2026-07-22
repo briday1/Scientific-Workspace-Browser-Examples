@@ -1,4 +1,4 @@
-"""Digital communications pipeline package."""
+"""Synthetic digital communications pipeline."""
 
 from .workspace import create_workspace
 

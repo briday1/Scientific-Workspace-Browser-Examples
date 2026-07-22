@@ -13,7 +13,7 @@ src/sigvue_examples/
 │   ├── delivery.py
 │   ├── analysis.py
 │   ├── plots.py
-│   ├── domain.py
+│   ├── models.py
 │   └── workspace.py
 ├── events/
 ├── waterfall/
@@ -27,8 +27,9 @@ src/sigvue_examples/
 
 Every `workspace.py` is the small framework boundary: it assembles a
 `Workspace` from that pipeline's `source`, `delivery`, `analysis`,
-`plots`, and optional `capabilities` modules. `domain.py` keeps the typed domain
-models and lower-level helpers that those focused modules expose. Cross-pipeline code is limited to
+`plots`, and optional `capabilities` modules. The copyable communications and
+waterfall examples keep their typed lifecycle values in a small `models.py`.
+Cross-pipeline code is limited to
 `io/sigmf` for ranged file access and SigMF capabilities, and
 `style` for Plotly appearance. Neither shared package chooses tabs, playback
 mode, parameters, or analysis behavior.
@@ -43,8 +44,8 @@ assembly uses framework objects for every behavioral slot: `Workspace`,
 and optional `Exporter`. There are no alternate constructor names or
 structurally inferred lifecycle objects.
 
-`io/sigmf/capabilities.py` is the explicit bridge from that neutral I/O to Sigvue's
-optional `Annotator` and `Exporter` base objects. These workspaces write standard
+`io/sigmf/capabilities.py` is an optional bridge from the shared I/O to Sigvue's
+optional `Annotator` and `Exporter` base objects. Capability-enabled workspaces write standard
 SigMF sample start/count, comment, generator, and UUID annotation fields. Waterfall
 workspaces also read and write standard lower/upper RF-frequency edges, populate editable
 bounds from the visible Plotly axes, and show in-view annotations as hoverable regions.
@@ -56,26 +57,11 @@ menu.
 
 - **Digital Communications** — choose a synthetic QPSK or 16-QAM SigMF recording, then drag or resize a short interval; both use a constellation tab followed by an eye-diagram tab.
 - **Acoustic Event Review** — navigate irregular markers and display waveform and spectrum products already stored in a JSON results file; the workspace performs no raw-audio processing.
-- **Radio Astronomy RFI Survey** — inspect real SigMF recordings from an Allen Telescope Array site survey using a sparse full-record power overview and a windowed spectrum/waterfall view.
-- **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset, then drag a window over its sliding-median power overview and inspect the selected time-frequency region.
+- **Radio Astronomy RFI Survey** — inspect real SigMF recordings from an Allen Telescope Array site survey with the same small, reusable windowed waterfall pipeline.
+- **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset and inspect a selected interval with the bundled example's average-spectrum and waterfall presentation.
 - **LFM Live View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface. Analysis stays at full slow-time, fast-time, and frequency resolution while a separate Raster rendering box controls only the browser image resolution and exact block statistic.
-- **Radar Data · Generic Waterfall** — point the reusable waterfall workspace at those same SigMF collection manifests, then choose any calibration, terminated-noise, or OTA channel from a dropdown without adding radar-specific plotting code.
 
 Every workspace is backed by files, but generated data is not committed.
-
-The reusable waterfall workspace also demonstrates background batch actions. From
-either its workspace card or discovered-item table, build exact first-2-ms interactive
-waterfall reports without opening a data view, export an item's SigMF metadata, or
-compile all discovered recordings into one downloadable report archive. Yellow and
-green launcher states show running and completed jobs.
-
-The same jobs can be inspected and dispatched from a terminal:
-
-```bash
-sigvue batch --config browser.toml --list
-sigvue batch --config browser.toml \
-  --workspace lte-recordings --action report-all --output reports
-```
 
 The interactive Plotly waterfall keeps box selection and zooming. Its Details panel
 groups raster width, height, and max/mean/median aggregation in a dedicated settings
@@ -98,7 +84,7 @@ below and stops immediately if any one of them fails.
 Generate only the compact recordings and precomputed acoustic results with:
 
 ```bash
-python scripts/generate_minimal_sigmf.py
+python scripts/generate_comms.py
 python scripts/generate_segmented_results.py
 ```
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sigvue-examples"
-version = "0.1.0"
+version = "0.2.0"
 description = "File-backed SigMF examples for Sigvue"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ dependencies = [
     "numpy>=1.24",
     "plotly>=6.1.1",
     "scipy>=1.10",
-    "sigvue>=2026.31",
+    "sigvue>=2026.32",
 ]
 
 [project.optional-dependencies]

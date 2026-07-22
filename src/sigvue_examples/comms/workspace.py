@@ -1,30 +1,36 @@
-"""Workspace assembly for the digital communications pipeline."""
+"""Framework assembly for the windowed communications pipeline."""
 
 from pathlib import Path
 
-from sigvue.plugin import Workspace
+from sigvue.plugin import DiscoveryColumn, Workspace
 
-from ..io.sigmf.capabilities import SIGNAL_DISCOVERY_COLUMNS, SigMFAnnotator, SigMFExporter
+from ..io.sigmf.capabilities import SigMFAnnotator
 from .analysis import CommsAnalysis
 from .delivery import WindowedCommsDelivery
 from .plots import CommsPresentation
 from .source import recording_source
 
 
+DISCOVERY_COLUMNS = (
+    DiscoveryColumn("date", "Date", "datetime"),
+    DiscoveryColumn("sample_rate", "Sampling rate", "si", unit="sample/s"),
+    DiscoveryColumn("rf_frequency", "RF frequency", "si", unit="Hz"),
+)
+
+
 def create_workspace(config=None) -> Workspace:
     values = config or {}
     root = Path(values.get("data_root", Path.cwd() / "data/comms"))
     return Workspace(
-        identifier="digital-comms",
-        name="Digital Communications",
-        description="Windowed mode: compare file-backed QPSK and 16-QAM recordings with constellation and eye-diagram views.",
-        source=recording_source(root),
-        delivery=WindowedCommsDelivery(),
+        identifier="synthetic-comms",
+        name="Synthetic Communications",
+        description="Windowed constellation and eye-diagram analysis for generated QPSK, 16-QAM, and 64-QAM recordings.",
+        source=recording_source(root, str(values.get("filename", "synthetic-*.sigmf-meta"))),
         annotator=SigMFAnnotator(),
-        exporter=SigMFExporter(),
+        delivery=WindowedCommsDelivery(),
         analysis=CommsAnalysis(),
         presentation=CommsPresentation(),
         category="digital communications",
-        tags=("windowed", "qpsk", "16-qam", "constellation", "eye diagram"),
-        discovery_columns=SIGNAL_DISCOVERY_COLUMNS,
+        tags=("windowed", "synthetic", "SigMF", "QPSK", "16-QAM", "64-QAM"),
+        discovery_columns=DISCOVERY_COLUMNS,
     )

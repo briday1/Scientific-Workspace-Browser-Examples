@@ -24,7 +24,7 @@ from sigvue.plugin import (
     ExportRequest,
     ParameterContext,
     PlaybackMode,
-    RasterizedHeatmap,
+    add_viewport_heatmap,
     TraceStyle,
     ViewContext,
 )
@@ -38,7 +38,7 @@ from ..io.sigmf.capabilities import (
     waterfall_annotation_fields,
 )
 from ..io.sigmf.recording import load_recording
-from ..style import ORANGE, TEAL, style_plotly
+from ..style import ORANGE, TEAL, heatmap_grid_color, style_plotly
 from .style import hsv_channel_colors
 
 
@@ -606,6 +606,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 window_start_seconds=data.start_sample / data.sample_rate,
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
+                viewport=ui.plot_viewport("waterfall-domain-0"),
                 **waterfall_render,
             ),
             ("Frequency PSD", "All"): _waterfall_figure(
@@ -618,6 +619,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 window_start_seconds=data.start_sample / data.sample_rate,
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
+                viewport=ui.plot_viewport("waterfall-domain-1"),
                 **waterfall_render,
             ),
         }
@@ -634,6 +636,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
                 selected_channel=channel,
+                viewport=ui.plot_viewport(f"waterfall-domain-{2 + channel * 2}"),
                 **waterfall_render,
             )
             waterfall_views[("Frequency PSD", channel_label)] = _waterfall_figure(
@@ -647,6 +650,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
                 selected_channel=channel,
+                viewport=ui.plot_viewport(f"waterfall-domain-{3 + channel * 2}"),
                 **waterfall_render,
             )
         ui.view_switcher(
@@ -1045,6 +1049,7 @@ def _waterfall_figure(
     render_width: int = 1024,
     render_height: int = 512,
     render_aggregation: str = "mean",
+    viewport: dict[str, object] | None = None,
 ) -> go.Figure:
     channels = tuple(range(4)) if selected_channel is None else (selected_channel,)
     tiled = selected_channel is None
@@ -1060,7 +1065,9 @@ def _waterfall_figure(
             x, z, title = products.fast_time_us, products.time_waterfall_dbm[channel], "Power (dBm)"
         else:
             x, z, title = products.frequencies_hz, products.psd_waterfall_dbm_hz[channel], "PSD (dBm/Hz)"
-        RasterizedHeatmap.create(
+        add_viewport_heatmap(
+            figure,
+            viewport=viewport,
             x=x,
             y=products.slow_time_edges_s,
             z=z,
@@ -1072,8 +1079,6 @@ def _waterfall_figure(
             render_width=render_width,
             render_height=render_height,
             aggregation=render_aggregation,
-        ).add_to(
-            figure,
             row=display_index // 2 + 1 if tiled else 1,
             col=display_index % 2 + 1 if tiled else 1,
         )
@@ -1200,13 +1205,16 @@ def _waterfall_figure(
         title_text="Fast time (us)" if domain == "time" else "Frequency (Hz)",
         row=2 if tiled else 1,
     )
-    return style_plotly(
+    styled = style_plotly(
         figure,
         title=("Fast-time power waterfall" if domain == "time" else "Frequency PSD waterfall")
         + ("" if tiled else f" · Channel {selected_channel + 1}"),
         theme=theme,
         boxed_axes=True,
     )
+    styled.update_xaxes(gridcolor=heatmap_grid_color(theme), gridwidth=0.35)
+    styled.update_yaxes(gridcolor=heatmap_grid_color(theme), gridwidth=0.35)
+    return styled
 
 
 def _time_figure(

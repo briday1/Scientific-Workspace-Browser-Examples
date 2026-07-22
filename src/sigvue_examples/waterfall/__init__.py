@@ -1,4 +1,4 @@
-"""Reusable SigMF waterfall pipeline package."""
+"""Synthetic LTE waterfall pipeline."""
 
 from .workspace import create_workspace
 

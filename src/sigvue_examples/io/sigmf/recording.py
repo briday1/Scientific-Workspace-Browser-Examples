@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from threading import RLock
 
 import numpy as np
+
+from sigvue.plugin import DataResource
 
 
 _metadata_lock = RLock()
@@ -26,6 +29,11 @@ class SigMFRecording:
     @property
     def duration_seconds(self) -> float:
         return self.sample_count / self.sample_rate
+
+    @property
+    def center_frequency(self) -> float:
+        captures = self.metadata.get("captures", ())
+        return float(captures[0].get("core:frequency", 0.0)) if captures else 0.0
 
     def read(self, start: int, count: int) -> np.ndarray:
         """Read only the requested interleaved complex frames."""
@@ -94,4 +102,32 @@ def load_recording(
         sample_count,
         metadata,
         datatype,
+    )
+
+
+def describe_recording(path: Path) -> DataResource:
+    """Describe one SigMF file for the copyable comms and waterfall examples."""
+    metadata = load_metadata(path)
+    global_metadata = metadata["global"]
+    captures = metadata.get("captures", ())
+    capture = captures[0] if captures else {}
+    sample_rate = global_metadata.get("core:sample_rate")
+    coordinate_label = (
+        f"{float(sample_rate) / 1e6:g} MS/s"
+        if sample_rate is not None
+        else "Sample-normalized (rate unavailable)"
+    )
+    return DataResource(
+        identifier=path.name.removesuffix(".sigmf-meta"),
+        title=str(global_metadata.get("core:description") or path.stem),
+        source=path,
+        subtitle=f"{coordinate_label} · {global_metadata.get('core:datatype', 'SigMF')}",
+        timestamp=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
+        tags=("sigmf", str(global_metadata.get("example:direction", "signal"))),
+        summary={
+            "date": capture.get("core:datetime") or global_metadata.get("core:datetime"),
+            "sample_rate": global_metadata.get("core:sample_rate"),
+            "rf_frequency": capture.get("core:frequency"),
+        },
+        navigation_path=(path.parent.name,),
     )

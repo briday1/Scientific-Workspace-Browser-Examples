@@ -199,6 +199,8 @@ class RadarCollectionTests(unittest.TestCase):
         self.assertTrue(all(control.placement == "details" for control in resolution))
         waterfall = next(figure for figure in ui.figures.values() if figure.layout.images)
         self.assertGreaterEqual(len(waterfall.layout.images), 1)
+        self.assertEqual("rgba(96,113,125,0.12)", waterfall.layout.xaxis.gridcolor)
+        self.assertEqual(0.35, waterfall.layout.xaxis.gridwidth)
 
     def test_full_pri_psd_is_invariant_to_circular_fast_time_shift(self):
         pri = 1_024

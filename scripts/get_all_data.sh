@@ -15,8 +15,8 @@ run() {
     "$@"
 }
 
-run python "${repository_root}/scripts/generate_minimal_sigmf.py" \
-    --output "$data_root"
+run python "${repository_root}/scripts/generate_comms.py" \
+    --output "${data_root}/comms"
 run python "${repository_root}/scripts/generate_segmented_results.py" \
     --output "${data_root}/acoustic-events-segmented/acoustic-events.json"
 run python "${repository_root}/scripts/generate_lfm_collection.py" \

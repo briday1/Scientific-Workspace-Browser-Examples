@@ -1,6 +1,6 @@
 """Shared Plotly styling used across otherwise independent pipelines."""
 
-from .plotly import COLORS, GRID, INK, MUTED, ORANGE, TEAL, style_figure, style_plotly
+from .plotly import COLORS, GRID, INK, MUTED, ORANGE, TEAL, heatmap_grid_color, style_figure, style_plotly
 
 __all__ = [
     "COLORS",
@@ -9,6 +9,7 @@ __all__ = [
     "MUTED",
     "ORANGE",
     "TEAL",
+    "heatmap_grid_color",
     "style_figure",
     "style_plotly",
 ]
