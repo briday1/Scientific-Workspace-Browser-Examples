@@ -13,7 +13,15 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from sigvue.plugin import Batch, BatchDestination, BatchRequest, BatchResult, CapabilityChoice, DataResource
+from sigvue.plugin import (
+    Batch,
+    BatchDestination,
+    BatchRequest,
+    BatchResult,
+    CapabilityChoice,
+    DataResource,
+    RasterizedHeatmap,
+)
 
 from ..io.sigmf.recording import SigMFRecording
 from .domain import GroupedSigMFRecording, _waterfall_spectrogram
@@ -64,7 +72,7 @@ def _report_figure(recording: Recording) -> go.Figure:
             name=f"{label} average PSD",
             visible=visible,
         ), row=1, col=1)
-        figure.add_trace(go.Heatmap(
+        RasterizedHeatmap.create(
             x=frequency,
             y=time_edges / member.sample_rate * 1e3,
             z=waterfall,
@@ -72,13 +80,24 @@ def _report_figure(recording: Recording) -> go.Figure:
             colorbar={"title": "dBFS"},
             colorscale="Plasma",
             visible=visible,
-        ), row=2, col=1)
+            render_width=1024,
+            render_height=512,
+            aggregation="mean",
+        ).add_to(figure, row=2, col=1)
     buttons = []
     for member_index, (label, _) in enumerate(_members(recording)):
         visible = [False] * (2 * len(_members(recording)))
         visible[2 * member_index] = True
         visible[2 * member_index + 1] = True
-        buttons.append({"label": label, "method": "update", "args": [{"visible": visible}]})
+        image_visibility = {
+            f"images[{image_index}].visible": image_index == member_index
+            for image_index in range(len(_members(recording)))
+        }
+        buttons.append({
+            "label": label,
+            "method": "update",
+            "args": [{"visible": visible}, image_visibility],
+        })
     figure.update_layout(
         title="Exact first 2 ms spectrum and waterfall",
         template="plotly_white",

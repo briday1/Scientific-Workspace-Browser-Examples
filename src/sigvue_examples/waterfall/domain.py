@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from io import BytesIO
 import json
 from pathlib import Path
 
 import numpy as np
-import plotly.colors as plotly_colors
 import plotly.graph_objects as go
-from PIL import Image
 from plotly.subplots import make_subplots
 
 from sigvue.plugin import (
@@ -26,6 +22,7 @@ from sigvue.plugin import (
     DeliveryContext,
     DirectorySource,
     ParameterContext,
+    RasterizedHeatmap,
     TraceStyle,
     ViewContext,
 )
@@ -40,117 +37,6 @@ from ..style import style_figure
 
 
 COLORMAPS = ("Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo", "Blues", "Greens", "Hot", "Jet")
-
-_RASTER_LUT_SIZE = 256
-
-
-def _colorscale_lut(colorscale: str) -> np.ndarray:
-    """Return a 256-entry RGB lookup table for a Plotly colorscale."""
-    colors = plotly_colors.sample_colorscale(
-        colorscale,
-        np.linspace(0.0, 1.0, _RASTER_LUT_SIZE),
-        colortype="rgb",
-    )
-    return np.asarray(
-        [plotly_colors.unlabel_rgb(color) for color in colors],
-        dtype=np.uint8,
-    )
-
-
-def _waterfall_png_uri(
-    values: np.ndarray,
-    *,
-    zmin: float,
-    zmax: float,
-    colorscale: str,
-) -> str:
-    """Color-map a waterfall once in NumPy and encode it as a fast PNG."""
-    z = np.asarray(values)
-    if z.ndim != 2:
-        raise ValueError(f"Expected a 2-D waterfall, received shape {z.shape}")
-
-    zmin = float(zmin)
-    zmax = float(zmax)
-    if not np.isfinite(zmin) or not np.isfinite(zmax) or zmax <= zmin:
-        raise ValueError(
-            f"Expected finite zmax > zmin, received zmin={zmin}, zmax={zmax}"
-        )
-
-    finite = np.isfinite(z)
-    scaled = np.zeros(z.shape, dtype=np.float32)
-    np.subtract(z, zmin, out=scaled, where=finite)
-    scaled *= (_RASTER_LUT_SIZE - 1) / (zmax - zmin)
-    np.clip(scaled, 0.0, _RASTER_LUT_SIZE - 1, out=scaled)
-
-    indices = np.rint(scaled).astype(np.uint8)
-    rgb = _colorscale_lut(colorscale)[indices]
-
-    # Heatmap row zero is at the low end of an ascending y axis. Raster row
-    # zero is displayed at the top, so flip vertically.
-    rgb = np.ascontiguousarray(np.flipud(rgb))
-
-    buffer = BytesIO()
-    Image.fromarray(rgb, mode="RGB").save(
-        buffer,
-        format="PNG",
-        compress_level=1,
-        optimize=False,
-    )
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
-
-
-def _rasterize_heatmap_after_styling(
-    figure: go.Figure,
-    *,
-    trace_index: int,
-    values: np.ndarray,
-    x_bounds: tuple[float, float],
-    y_bounds: tuple[float, float],
-    zmin: float,
-    zmax: float,
-    colorscale: str,
-) -> go.Figure:
-    """Replace one styled Heatmap payload with a raster without changing layout."""
-    source = _waterfall_png_uri(
-        values,
-        zmin=zmin,
-        zmax=zmax,
-        colorscale=colorscale,
-    )
-
-    trace = figure.data[trace_index]
-    xref = trace.xaxis or "x"
-    yref = trace.yaxis or "y"
-    xmin, xmax = map(float, x_bounds)
-    ymin, ymax = map(float, y_bounds)
-
-    figure.add_layout_image(
-        source=source,
-        xref=xref,
-        yref=yref,
-        x=xmin,
-        y=ymax,
-        sizex=xmax - xmin,
-        sizey=ymax - ymin,
-        xanchor="left",
-        yanchor="top",
-        sizing="stretch",
-        opacity=1.0,
-        layer="below",
-    )
-
-    # Preserve the original trace object, subplot assignment, colorscale, and
-    # colorbar. Replace only the expensive matrix with a transparent 2x2 trace.
-    trace.x = [xmin, xmax]
-    trace.y = [ymin, ymax]
-    trace.z = [[zmin, zmax], [zmin, zmax]]
-    trace.opacity = 0.0
-    trace.hoverinfo = "skip"
-    trace.hovertemplate = None
-
-    return figure
-
 
 def _rgba(color: str, alpha: float) -> str:
     value = color.lstrip("#")
@@ -730,22 +616,13 @@ def _waterfall_channel_figure(
     annotation_style: TraceStyle,
     show_annotations: bool,
     scale_revision: str,
-    slow_time_decimation: int,
-    fast_time_decimation: int,
+    render_width: int,
+    render_height: int,
+    aggregation: str,
 ) -> go.Figure:
     data = products.data
     zmin, zmax = limits
     frequency_mhz = products.frequency_mhz
-    # Presentation-only stride decimation: retain exact selected STFT cells and
-    # leave both the analysis products and average spectrum unchanged.
-    row_indices = np.arange(0, products.waterfall_dbfs.shape[0], slow_time_decimation)
-    frequency_indices = np.arange(0, products.waterfall_dbfs.shape[1], fast_time_decimation)
-    displayed_frequency_mhz = frequency_mhz[frequency_indices]
-    displayed_time_edges_ms = np.concatenate((
-        products.time_edges_ms[row_indices],
-        products.time_edges_ms[-1:],
-    ))
-    displayed_waterfall_dbfs = products.waterfall_dbfs[np.ix_(row_indices, frequency_indices)]
     view_start_ms, view_stop_ms = products.time_bounds_ms
     figure = make_subplots(
         rows=2,
@@ -764,19 +641,18 @@ def _waterfall_channel_figure(
         row=1,
         col=1,
     )
-    figure.add_trace(
-        go.Heatmap(
-            x=displayed_frequency_mhz,
-            y=displayed_time_edges_ms,
-            z=displayed_waterfall_dbfs,
-            zmin=zmin,
-            zmax=zmax,
-            colorscale=colormap,
-            colorbar={"title": "dBFS"},
-        ),
-        row=2,
-        col=1,
-    )
+    RasterizedHeatmap.create(
+        x=frequency_mhz,
+        y=products.time_edges_ms,
+        z=products.waterfall_dbfs,
+        zmin=zmin,
+        zmax=zmax,
+        colorscale=colormap,
+        colorbar={"title": "dBFS"},
+        render_width=render_width,
+        render_height=render_height,
+        aggregation=aggregation,
+    ).add_to(figure, row=2, col=1)
     figure.add_trace(
         go.Scatter(
             x=(float(frequency_mhz[0]), float(frequency_mhz[-1])),
@@ -836,27 +712,10 @@ def _waterfall_channel_figure(
         time_coordinates_are_edges=True,
     )
 
-    # Let the existing style/layout code see the exact original figure first.
-    # This preserves the plot window, subplot domains, explicit axis limits,
-    # selection surface, and annotation overlays.
-    figure = style_figure(
+    return style_figure(
         figure,
         theme,
         f"{products.label} · spectrum and waterfall",
-    )
-
-    # Only after styling replace the large Heatmap payload with a raster.
-    # Trace index 1 is the waterfall; all later traces remain interactive
-    # annotation or selection overlays.
-    return _rasterize_heatmap_after_styling(
-        figure,
-        trace_index=1,
-        values=displayed_waterfall_dbfs,
-        x_bounds=products.frequency_bounds_mhz,
-        y_bounds=products.time_bounds_ms,
-        zmin=float(zmin),
-        zmax=float(zmax),
-        colorscale=colormap,
     )
 
 
@@ -889,6 +748,11 @@ def _automatic_dbfs_limits(products: WaterfallChannelProducts) -> tuple[float, f
     return _rounded_limits(lower, upper)
 
 
+def _rendered_dimension(size: int, limit: int) -> int:
+    block = (size + limit - 1) // limit
+    return (size + block - 1) // block
+
+
 def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
     show_annotations = ui.toggle(
         "waterfall_show_annotations", default=True, label="Show annotations", group="Annotation display"
@@ -909,18 +773,25 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
         options=COLORMAPS,
         group="Spectrogram display",
     )
-    slow_time_decimation = int(ui.select(
-        "waterfall_slow_time_display_decimation",
-        label="Slow-time display decimation",
-        default=1,
-        options=(1, 2, 4, 8, 16),
+    render_width = int(ui.select(
+        "waterfall_render_width",
+        label="Heatmap render width",
+        default=1024,
+        options=(256, 512, 1024, 2048),
         group="Spectrogram display",
     ))
-    fast_time_decimation = int(ui.select(
-        "waterfall_fast_time_display_decimation",
-        label="Fast-time display decimation",
-        default=1,
-        options=(1, 2, 4, 8, 16),
+    render_height = int(ui.select(
+        "waterfall_render_height",
+        label="Heatmap render height",
+        default=512,
+        options=(128, 256, 512, 1024),
+        group="Spectrogram display",
+    ))
+    aggregation = str(ui.select(
+        "waterfall_render_aggregation",
+        label="Heatmap aggregation",
+        default="mean",
+        options=("max", "mean", "median"),
         group="Spectrogram display",
     ))
     auto_scale = ui.toggle(
@@ -947,8 +818,9 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
         f"{zmin:.9g}",
         f"{zmax:.9g}",
         colormap,
-        str(slow_time_decimation),
-        str(fast_time_decimation),
+        str(render_width),
+        str(render_height),
+        aggregation,
         str(show_annotations),
         annotation_style.color,
         f"{annotation_style.width:.9g}",
@@ -965,8 +837,9 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
             annotation_style=annotation_style,
             show_annotations=show_annotations,
             scale_revision=scale_revision,
-            slow_time_decimation=slow_time_decimation,
-            fast_time_decimation=fast_time_decimation,
+            render_width=render_width,
+            render_height=render_height,
+            aggregation=aggregation,
         )
         for channel in products.channels
     }
@@ -975,12 +848,12 @@ def present_waterfall(products: WaterfallProducts, ui: ViewContext) -> None:
     ui.stat("Sample rate", f"{first.data.sample_rate / 1e6:g} MS/s")
     ui.stat("Members", len(products.channels))
     full_cells = sum(channel.waterfall_dbfs.size for channel in products.channels)
-    displayed_cells = sum(
-        ((channel.waterfall_dbfs.shape[0] + slow_time_decimation - 1) // slow_time_decimation)
-        * ((channel.waterfall_dbfs.shape[1] + fast_time_decimation - 1) // fast_time_decimation)
+    rendered_cells = sum(
+        _rendered_dimension(channel.waterfall_dbfs.shape[0], render_height)
+        * _rendered_dimension(channel.waterfall_dbfs.shape[1], render_width)
         for channel in products.channels
     )
-    ui.stat("Displayed heatmap cells", f"{displayed_cells:,} of {full_cells:,}")
+    ui.stat("Rendered heatmap pixels", f"{rendered_cells:,} from {full_cells:,} cells")
     with ui.tab("Spectrum + waterfall"):
         if len(figures) == 1:
             ui.plot(next(iter(figures.values())), key="waterfall-spectrum", axis_navigation="bounded")

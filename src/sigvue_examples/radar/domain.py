@@ -24,6 +24,7 @@ from sigvue.plugin import (
     ExportRequest,
     ParameterContext,
     PlaybackMode,
+    RasterizedHeatmap,
     TraceStyle,
     ViewContext,
 )
@@ -395,9 +396,6 @@ class LfmSettings:
     phase_reference: str
     amplitude_reference: str
     reference_noise_psd_dbm_hz: float
-    slow_time_points: int
-    fast_time_points: int
-    frequency_points: int
 
 
 @dataclass(frozen=True)
@@ -455,38 +453,11 @@ def configure_lfm(data: LfmInput, ui: ParameterContext) -> LfmSettings:
             group="Calibration parameters",
         )
     )
-    slow_time_points = ui.render_points(
-            "slow_time_points",
-            label="Waterfall rows",
-            default=128,
-            minimum=8,
-            maximum=4096,
-            step=8,
-    )
-    fast_time_points = ui.render_points(
-            "fast_time_points",
-            label="Fast-time points",
-            default=256,
-            minimum=16,
-            maximum=16384,
-            step=16,
-    )
-    frequency_points = ui.render_points(
-            "frequency_points",
-            label="Frequency points",
-            default=256,
-            minimum=16,
-            maximum=16384,
-            step=16,
-    )
     return LfmSettings(
         adc_bits=adc_bits,
         phase_reference=phase_reference,
         amplitude_reference=amplitude_reference,
         reference_noise_psd_dbm_hz=reference_noise_psd_dbm_hz,
-        slow_time_points=slow_time_points,
-        fast_time_points=fast_time_points,
-        frequency_points=frequency_points,
     )
 
 
@@ -505,9 +476,6 @@ def process_lfm(data: LfmInput, settings: LfmSettings) -> LfmAnalysisProducts:
         data.sample_rate,
         data.pri_samples,
         data.start_sample,
-        max_rows=settings.slow_time_points,
-        max_fast_time_bins=settings.fast_time_points,
-        max_frequency_bins=settings.frequency_points,
     )
     phase_rows = [
         {
@@ -604,6 +572,29 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
         step=1.0,
         group="Waterfall display",
     )
+    waterfall_render = {
+        "render_width": int(ui.select(
+            "lfm_waterfall_render_width",
+            label="Heatmap render width",
+            default=1024,
+            options=(256, 512, 1024, 2048),
+            group="Waterfall display",
+        )),
+        "render_height": int(ui.select(
+            "lfm_waterfall_render_height",
+            label="Heatmap render height",
+            default=512,
+            options=(128, 256, 512, 1024),
+            group="Waterfall display",
+        )),
+        "render_aggregation": str(ui.select(
+            "lfm_waterfall_render_aggregation",
+            label="Heatmap aggregation",
+            default="mean",
+            options=("max", "mean", "median"),
+            group="Waterfall display",
+        )),
+    }
 
     with ui.tab("Waterfall"):
         waterfall_views = {
@@ -617,6 +608,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 window_start_seconds=data.start_sample / data.sample_rate,
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
+                **waterfall_render,
             ),
             ("Frequency PSD", "All"): _waterfall_figure(
                 products,
@@ -628,6 +620,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 window_start_seconds=data.start_sample / data.sample_rate,
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
+                **waterfall_render,
             ),
         }
         for channel in range(4):
@@ -643,6 +636,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
                 selected_channel=channel,
+                **waterfall_render,
             )
             waterfall_views[("Frequency PSD", channel_label)] = _waterfall_figure(
                 products,
@@ -655,6 +649,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                 annotation_style=annotation_style,
                 show_annotations=show_annotations,
                 selected_channel=channel,
+                **waterfall_render,
             )
         ui.view_switcher(
             ("Domain", "Channels"),
@@ -811,15 +806,15 @@ def _products(
     rate: float,
     pri: int,
     start: int,
-    max_rows: int = 384,
-    max_fast_time_bins: int = 512,
-    max_frequency_bins: int = 512,
+    max_rows: int | None = None,
+    max_fast_time_bins: int | None = None,
+    max_frequency_bins: int | None = None,
 ) -> Products:
     row_count = channels.shape[1] // pri
     if row_count < 1:
         raise ValueError("Delivered data must contain at least one PRI")
     rows = channels[:, : row_count * pri].reshape(4, row_count, pri)
-    fast_group_size = max(1, ceil(pri / max_fast_time_bins))
+    fast_group_size = 1 if max_fast_time_bins is None else max(1, ceil(pri / max_fast_time_bins))
     displayed_samples = pri // fast_group_size * fast_group_size
     fast_time_start = start % pri
     fast_time = (
@@ -838,7 +833,9 @@ def _products(
     # the time waterfall. A rectangular full-row periodogram also preserves
     # spectral magnitude under circular shifts; display reduction happens only
     # after power has been calculated for every FFT bin.
-    frequency_group_size = max(1, ceil(pri / max_frequency_bins))
+    frequency_group_size = (
+        1 if max_frequency_bins is None else max(1, ceil(pri / max_frequency_bins))
+    )
     full_frequencies = np.fft.fftshift(np.fft.fftfreq(pri, d=1 / rate))
     frequencies = _group_mean(full_frequencies, frequency_group_size)
     frequency_bin_hz = rate / pri
@@ -848,7 +845,7 @@ def _products(
     psd_waterfall = []
     slow_time = []
     slow_time_edges = [0.0]
-    group_size = max(1, ceil(row_count / max_rows))
+    group_size = 1 if max_rows is None else max(1, ceil(row_count / max_rows))
     for first in range(0, row_count, group_size):
         block = rows[:, first : min(first + group_size, row_count)]
         block_power = np.abs(block) ** 2 / (2 * R_OHMS)
@@ -1047,6 +1044,9 @@ def _waterfall_figure(
     annotation_style: TraceStyle | None = None,
     show_annotations: bool = True,
     selected_channel: int | None = None,
+    render_width: int = 1024,
+    render_height: int = 512,
+    render_aggregation: str = "mean",
 ) -> go.Figure:
     channels = tuple(range(4)) if selected_channel is None else (selected_channel,)
     tiled = selected_channel is None
@@ -1062,17 +1062,20 @@ def _waterfall_figure(
             x, z, title = products.fast_time_us, products.time_waterfall_dbm[channel], "Power (dBm)"
         else:
             x, z, title = products.frequencies_hz, products.psd_waterfall_dbm_hz[channel], "PSD (dBm/Hz)"
-        figure.add_trace(
-            go.Heatmap(
-                x=x,
-                y=products.slow_time_edges_s,
-                z=z,
-                zmin=zlimits[0],
-                zmax=zlimits[1],
-                colorscale=colormap,
-                showscale=display_index == len(channels) - 1,
-                colorbar={"title": title},
-            ),
+        RasterizedHeatmap.create(
+            x=x,
+            y=products.slow_time_edges_s,
+            z=z,
+            zmin=zlimits[0],
+            zmax=zlimits[1],
+            colorscale=colormap,
+            showscale=display_index == len(channels) - 1,
+            colorbar={"title": title},
+            render_width=render_width,
+            render_height=render_height,
+            aggregation=render_aggregation,
+        ).add_to(
+            figure,
             row=display_index // 2 + 1 if tiled else 1,
             col=display_index % 2 + 1 if tiled else 1,
         )

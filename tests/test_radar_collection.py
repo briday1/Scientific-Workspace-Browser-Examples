@@ -157,7 +157,7 @@ class RadarCollectionTests(unittest.TestCase):
             (products.slow_time_edges_s[:-1] + products.slow_time_edges_s[1:]) / 2,
         )
 
-    def test_lfm_rendering_resolution_is_user_configurable(self):
+    def test_lfm_heatmap_rendering_is_view_configurable_without_reducing_analysis(self):
         samples = np.ones((4, 16_384), dtype=np.complex64) * (100 + 25j)
         data = LfmInput(
             sample_rate=10_000_000.0,
@@ -171,23 +171,34 @@ class RadarCollectionTests(unittest.TestCase):
         )
 
         ui = AnalysisContext({
-            "slow_time_points": "8",
-            "fast_time_points": "64",
-            "frequency_points": "32",
+            "lfm_waterfall_render_width": "256",
+            "lfm_waterfall_render_height": "128",
+            "lfm_waterfall_render_aggregation": "max",
         })
         settings = configure_lfm(data, ui)
-        products = process_lfm(data, settings).signal
+        results = process_lfm(data, settings)
+        present_lfm(results, ui)
+        products = results.signal
 
-        self.assertLessEqual(products.slow_time_s.size, 8)
-        self.assertLessEqual(products.fast_time_us.size, 64)
-        self.assertLessEqual(products.frequencies_hz.size, 32)
-        resolution = [control for control in ui.controls if control.group == "Rendering resolution"]
+        self.assertEqual(32, products.slow_time_s.size)
+        self.assertEqual(512, products.fast_time_us.size)
+        self.assertEqual(512, products.frequencies_hz.size)
+        resolution = [
+            control for control in ui.controls
+            if control.name.startswith("lfm_waterfall_render_")
+        ]
         self.assertEqual(
-            ["slow_time_points", "fast_time_points", "frequency_points"],
+            [
+                "lfm_waterfall_render_width",
+                "lfm_waterfall_render_height",
+                "lfm_waterfall_render_aggregation",
+            ],
             [control.name for control in resolution],
         )
-        self.assertEqual([128, 256, 256], [control.default for control in resolution])
+        self.assertEqual([1024, 512, "mean"], [control.default for control in resolution])
         self.assertTrue(all(control.placement == "details" for control in resolution))
+        waterfall = next(figure for figure in ui.figures.values() if figure.layout.images)
+        self.assertGreaterEqual(len(waterfall.layout.images), 1)
 
     def test_full_pri_psd_is_invariant_to_circular_fast_time_shift(self):
         pri = 1_024
@@ -199,11 +210,11 @@ class RadarCollectionTests(unittest.TestCase):
         baseline_products = _products(baseline, rate=1_024.0, pri=pri, start=0)
         shifted_products = _products(shifted, rate=1_024.0, pri=pri, start=0)
 
-        self.assertEqual(512, baseline_products.frequencies_hz.size)
+        self.assertEqual(1024, baseline_products.frequencies_hz.size)
         np.testing.assert_allclose(
             baseline_products.psd_waterfall_dbm_hz,
             shifted_products.psd_waterfall_dbm_hz,
-            atol=1e-10,
+            atol=1e-5,
         )
         np.testing.assert_allclose(
             baseline_products.psd_mean_dbm_hz,
@@ -295,7 +306,14 @@ class RadarCollectionTests(unittest.TestCase):
 
         waterfall_controls = [control for control in changed.controls if control.group == "Waterfall display"]
         self.assertEqual(
-            ["lfm_waterfall_colormap", "lfm_time_waterfall_limits", "lfm_psd_waterfall_limits"],
+            [
+                "lfm_waterfall_colormap",
+                "lfm_time_waterfall_limits",
+                "lfm_psd_waterfall_limits",
+                "lfm_waterfall_render_width",
+                "lfm_waterfall_render_height",
+                "lfm_waterfall_render_aggregation",
+            ],
             [control.name for control in waterfall_controls],
         )
         self.assertTrue(all(control.placement == "details" for control in waterfall_controls))

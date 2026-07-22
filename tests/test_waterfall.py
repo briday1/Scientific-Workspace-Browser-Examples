@@ -120,8 +120,10 @@ class WaterfallTests(unittest.TestCase):
             self.assertTrue(controls["waterfall_auto_dbfs_scale"].default)
             self.assertEqual("toggle", controls["waterfall_show_annotations"].control_type)
             self.assertTrue(controls["waterfall_show_annotations"].default)
-            self.assertEqual(1, controls["waterfall_slow_time_display_decimation"].default)
-            self.assertEqual(1, controls["waterfall_fast_time_display_decimation"].default)
+            self.assertEqual(1024, controls["waterfall_render_width"].default)
+            self.assertEqual(512, controls["waterfall_render_height"].default)
+            self.assertEqual("mean", controls["waterfall_render_aggregation"].default)
+            self.assertEqual("Spectrogram display", controls["waterfall_render_width"].group)
             self.assertEqual("Annotation display", controls["waterfall_annotation_region_color"].group)
             self.assertEqual("#ffffff", controls["waterfall_annotation_region_color"].default)
             self.assertEqual(0.5, controls["waterfall_annotation_region_width"].default)
@@ -142,7 +144,8 @@ class WaterfallTests(unittest.TestCase):
             self.assertIn("Selection surface", [trace.name for trace in figure.data])
             self.assertEqual((-95.0, -15.0), tuple(figure.layout.yaxis.range))
             self.assertEqual((-95.0, -15.0), (figure.data[1].zmin, figure.data[1].zmax))
-            self.assertEqual(figure.data[1].z.shape[0] + 1, len(figure.data[1].y))
+            self.assertEqual((2, 2), np.asarray(figure.data[1].z).shape)
+            self.assertEqual(1, len(figure.layout.images))
             self.assertEqual(tuple(figure.layout.yaxis2.range), (figure.data[1].y[0], figure.data[1].y[-1]))
             self.assertEqual("#00224e", figure.data[1].colorscale[0][1])
             self.assertEqual("RF frequency (MHz)", figure.layout.xaxis2.title.text)
@@ -173,14 +176,20 @@ class WaterfallTests(unittest.TestCase):
             self.assertEqual("markers", hit_targets.mode)
             self.assertEqual(0.01, hit_targets.marker.opacity)
 
-            decimated = opened.page.views[0].callback({
+            rasterized = opened.page.views[0].callback({
                 "waterfall_fft_size": "1024",
                 "waterfall_maximum_time_bins": "50",
-                "waterfall_slow_time_display_decimation": "4",
-                "waterfall_fast_time_display_decimation": "8",
+                "waterfall_render_width": "256",
+                "waterfall_render_height": "128",
+                "waterfall_render_aggregation": "max",
             })
-            np.testing.assert_array_equal(decimated.data[0].y, figure.data[0].y)
-            np.testing.assert_array_equal(decimated.data[1].z, figure.data[1].z[::4, ::8])
+            np.testing.assert_array_equal(rasterized.data[0].y, figure.data[0].y)
+            self.assertEqual((2, 2), np.asarray(rasterized.data[1].z).shape)
+            self.assertEqual(1, len(rasterized.layout.images))
+            self.assertNotEqual(
+                rasterized.layout.images[0].source,
+                figure.layout.images[0].source,
+            )
 
             hidden = opened.page.views[0].callback({
                 "waterfall_show_annotations": "false",
@@ -249,7 +258,8 @@ class WaterfallTests(unittest.TestCase):
                 [trace.type for trace in figure.data],
             )
             self.assertIn("Selection surface", [trace.name for trace in figure.data])
-            self.assertEqual(figure.data[1].z.shape[0] + 1, figure.data[1].y.size)
+            self.assertEqual((2, 2), np.asarray(figure.data[1].z).shape)
+            self.assertEqual(1, len(figure.layout.images))
             self.assertEqual(tuple(figure.layout.yaxis2.range), (figure.data[1].y[0], figure.data[1].y[-1]))
             self.assertIn("LTE allocation", figure.data[-1].text[0])
             fields = {field.name: field for field in opened.page.annotation.fields}
