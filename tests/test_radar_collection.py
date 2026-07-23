@@ -23,6 +23,8 @@ from sigvue_examples.radar.layout import channel_grid
 from sigvue_examples.radar.plots import CHANNEL_COLORS, _linear_average_db, _waterfall_figure
 from sigvue_examples.radar.presentation import COLORMAPS, LfmPresentation, present_lfm
 from sigvue_examples.radar.workspace import create_workspace as create_live_workspace
+from sigvue_examples.radar.sigmf_source import read_sigmf_collection
+from sigvue_examples.radar.sigmf_workspace import create_workspace as create_sigmf_workspace
 
 
 def render_lfm(data: LfmInput, values: dict[str, str]) -> AnalysisContext:
@@ -30,10 +32,31 @@ def render_lfm(data: LfmInput, values: dict[str, str]) -> AnalysisContext:
     settings = configure_lfm(data, ui)
     products = process_lfm(data, settings)
     present_lfm(products, ui)
+    ui.figures = {
+        key: value.resolve() if hasattr(value, "resolve") else value
+        for key, value in ui.figures.items()
+    }
     return ui
 
 
 class RadarCollectionTests(unittest.TestCase):
+    def test_sigmf_workspace_reuses_shared_buffered_pipeline(self):
+        workspace = create_sigmf_workspace({"data_root": Path("missing")})
+        self.assertIsInstance(workspace.analysis, LfmAnalysis)
+        self.assertIsInstance(workspace.presentation, LfmPresentation)
+        self.assertIsInstance(workspace.delivery, BufferedDelivery)
+
+    def test_standard_sigmf_collection_adapter_maps_streams_to_lfm_roles(self):
+        root = Path(__file__).resolve().parents[1] / "data" / "lfm-sigmf" / "15_57_39_010560"
+        collection = read_sigmf_collection(root / "raw_data.sigmf-collection")
+        self.assertEqual(10_240_000.0, collection.sample_rate)
+        self.assertEqual(16, len(collection.members["ota"]))
+        self.assertEqual(
+            {"calibration", "terminated-noise", "ota"},
+            set(collection.members),
+        )
+        self.assertEqual(102_400, collection.sample_count("ota"))
+
     def test_channel_grid_scales_to_sixteen_channels(self):
         four = channel_grid(4)
         sixteen = channel_grid(16)
@@ -122,7 +145,7 @@ class RadarCollectionTests(unittest.TestCase):
             initial_ui = AnalysisContext(live_values)
             initial = BufferedDelivery().prepare(collection, initial_ui)
             self.assertEqual(900, initial.start_sample)
-            self.assertEqual(0.9, initial_ui.playback_config.duration_seconds)
+            self.assertEqual(1.0, initial_ui.playback_config.duration_seconds)
 
             extra = np.zeros((200, 2), dtype="<i2")
             for member in collection.members["ota"]:
@@ -209,7 +232,11 @@ class RadarCollectionTests(unittest.TestCase):
         )
         self.assertEqual([1024, 512, "mean"], [control.default for control in resolution])
         self.assertTrue(all(control.placement == "details" for control in resolution))
-        waterfall = next(figure for figure in ui.figures.values() if figure.layout.images)
+        rendered = [
+            value.resolve() if hasattr(value, "resolve") else value
+            for value in ui.figures.values()
+        ]
+        waterfall = next(figure for figure in rendered if figure.layout.images)
         self.assertGreaterEqual(len(waterfall.layout.images), 1)
         self.assertEqual("rgba(96,113,125,0.12)", waterfall.layout.xaxis.gridcolor)
         self.assertEqual(0.35, waterfall.layout.xaxis.gridwidth)
@@ -258,7 +285,7 @@ class RadarCollectionTests(unittest.TestCase):
         )
         baseline = render_lfm(data, {"reference_noise_psd_dbm_hz": "-174", "adc_bits": "8"})
         changed = render_lfm(data, {"reference_noise_psd_dbm_hz": "-168.5", "adc_bits": "16"})
-        self.assertRegex(str(changed.statistics["Buffer memory"]), r"^[0-9.]+ [KMGT]?i?B$")
+        self.assertRegex(str(changed.statistics["Input buffer memory"]), r"^[0-9.]+ [KMGT]?i?B$")
 
         inline = [control for control in changed.controls if control.placement == "inline"]
         self.assertEqual(
@@ -339,14 +366,16 @@ class RadarCollectionTests(unittest.TestCase):
                 "lfm_waterfall_render_width",
                 "lfm_waterfall_render_height",
                 "lfm_waterfall_render_aggregation",
+                "lfm_line_render_points",
             ],
             [control.name for control in raster_controls],
         )
+        self.assertEqual(2048, raster_controls[-1].default)
         waterfall_switcher = changed.tabs[0].nodes[0]
-        self.assertEqual(("Domain", "Channels"), waterfall_switcher.props["labels"])
+        self.assertEqual(("Domain", "Channel"), waterfall_switcher.props["labels"])
         self.assertEqual(("buttons", "dropdown"), waterfall_switcher.props["selectors"])
         self.assertEqual(
-            (("Fast-time power", "Frequency PSD"), ("All", "Ch1", "Ch2", "Ch3", "Ch4")),
+            (("Fast-time power", "Frequency PSD"), ("Ch1", "Ch2", "Ch3", "Ch4", "Multi")),
             waterfall_switcher.props["options"],
         )
         for trace in changed.figures["waterfall-domain-0"].data:
@@ -360,7 +389,7 @@ class RadarCollectionTests(unittest.TestCase):
             self.assertEqual((-180.0, -80.0), (trace.zmin, trace.zmax))
             self.assertEqual("#0d0887", trace.colorscale[0][1])
         self.assertEqual(
-            4,
+            1,
             sum(trace.name == "Selection surface" for trace in changed.figures["waterfall-domain-0"].data),
         )
 
@@ -380,7 +409,7 @@ class RadarCollectionTests(unittest.TestCase):
             self.assertEqual((-175.0, -95.0), (trace.zmin, trace.zmax))
             self.assertEqual("#00224e", trace.colorscale[0][1])
 
-        for key in ("waterfall-domain-4", "waterfall-domain-5"):
+        for key in ("waterfall-domain-2", "waterfall-domain-3"):
             figure = changed.figures[key]
             heatmaps = [trace for trace in figure.data if trace.type == "heatmap"]
             self.assertEqual(1, len(heatmaps))
@@ -407,7 +436,7 @@ class RadarCollectionTests(unittest.TestCase):
             self.assertEqual("Average noise power", changed.figures[key].data[-2].name)
         for key in ("frequency-view-1", "frequency-view-2"):
             self.assertEqual("Average noise PSD", changed.figures[key].data[-2].name)
-        for key in ("waterfall-domain-0", "waterfall-domain-1"):
+        for key in ("waterfall-domain-8", "waterfall-domain-9"):
             self.assert_axes_share_range(changed.figures[key], "x")
             self.assert_axes_share_range(changed.figures[key], "y")
             for axis in (*changed.figures[key].select_xaxes(), *changed.figures[key].select_yaxes()):

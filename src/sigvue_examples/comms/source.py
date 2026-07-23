@@ -7,7 +7,7 @@ from sigvue.plugin import DirectorySource
 from ..io.sigmf import describe_recording, load_recording
 
 
-def recording_source(root: Path, pattern: str = "synthetic-*.sigmf-meta") -> DirectorySource:
+def recording_source(root: Path, pattern: str = "*.sigmf-meta") -> DirectorySource:
     return DirectorySource(
         root,
         pattern=pattern,

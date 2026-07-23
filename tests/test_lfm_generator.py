@@ -2,6 +2,7 @@ import unittest
 from math import log10
 from tempfile import TemporaryDirectory
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -14,6 +15,7 @@ from scripts.generate_lfm_collection import (
     R_OHMS,
     THERMAL_NOISE_DBM_HZ,
     VOLTS_PER_COUNT,
+    generate_collection,
     noise_component_std,
     write_member,
 )
@@ -21,6 +23,30 @@ from sigvue_examples.radar.domain import _averaged_psd, _single_psd
 
 
 class LfmGeneratorTests(unittest.TestCase):
+    def test_collection_manifest_uses_standard_streams_with_lfm_roles(self):
+        with TemporaryDirectory() as directory, patch(
+            "scripts.generate_lfm_collection.write_member"
+        ):
+            path = generate_collection(
+                Path(directory),
+                PROFILES["2mhz"],
+                noise_figure_db=7.0,
+                seed=1234,
+            )
+            import json
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            collection = payload["collection"]
+
+        self.assertEqual("1.2.6", collection["core:version"])
+        self.assertEqual("lfm", collection["core:extensions"][0]["name"])
+        self.assertEqual(12, len(collection["core:streams"]))
+        self.assertEqual(
+            {"calibration", "terminated-noise", "ota"},
+            {stream["lfm:role"] for stream in collection["core:streams"]},
+        )
+        self.assertNotIn("members", payload)
+
     def test_generator_exposes_original_and_multi_target_profiles(self):
         self.assertEqual({"10mhz", "2mhz"}, set(PROFILES))
         self.assertEqual(10_000_000, PROFILES["10mhz"].sample_rate)

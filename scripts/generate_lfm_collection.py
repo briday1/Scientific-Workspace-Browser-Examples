@@ -1,4 +1,4 @@
-"""Generate ignored local ci16_le data for both live LFM examples."""
+"""Generate standard SigMF collections for the calibrated LFM workspace."""
 
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ def generate_collection(root: Path, profile: LfmProfile, noise_figure_db: float,
     for path in root.glob("*.sigmf-*"):
         path.unlink()
     power = -20.0
-    members = []
+    streams = []
     for role_index, (role, duration) in enumerate(
         (("calibration", 0.1), ("terminated-noise", 0.1), ("ota", 1.0))
     ):
@@ -168,29 +168,29 @@ def generate_collection(root: Path, profile: LfmProfile, noise_figure_db: float,
                 ota_sweep_bandwidth_hz=profile.sweep_bandwidth_hz,
                 ota_targets=profile.targets,
             )
-            members.append(
+            streams.append(
                 {
-                    "role": role,
-                    "channel": channel,
-                    "metadata": f"{role}-ch{channel}.sigmf-meta",
-                    "data": f"{role}-ch{channel}.sigmf-data",
-                    "duration_seconds": duration,
+                    "name": f"{role}-ch{channel}.sigmf-meta",
+                    "lfm:role": role,
+                    "lfm:channel": channel,
+                    "lfm:duration_seconds": duration,
                 }
             )
     manifest = {
         "collection": {
-            "name": profile.name,
-            "sample_rate": profile.sample_rate,
-            "calibration_dbm": power,
-            "ota_prf_hz": profile.prf_hz,
-            "ota_pulse_width_seconds": profile.pulse_width_seconds,
+            "core:version": "1.2.6",
+            "core:description": profile.name,
+            "core:extensions": [{"name": "lfm", "version": "0.1.0", "optional": False}],
+            "core:streams": streams,
+            "lfm:calibration_dbm": power,
+            "lfm:ota_prf_hz": profile.prf_hz,
+            "lfm:ota_pulse_width_seconds": profile.pulse_width_seconds,
         },
-        "members": members,
     }
     manifest_path = root / f"lfm-{profile.key}.sigmf-collection"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(
-        f"Generated {len(members)} members for {profile.name} in {root} "
+        f"Generated {len(streams)} streams for {profile.name} in {root} "
         f"with hidden true noise figure {noise_figure_db:g} dB"
     )
     return manifest_path
@@ -198,7 +198,7 @@ def generate_collection(root: Path, profile: LfmProfile, noise_figure_db: float,
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=Path("data/lfm-live"), help="parent directory for profile data")
+    parser.add_argument("--output", type=Path, default=Path("data/lfm-sigmf"), help="parent directory for profile data")
     parser.add_argument("--profile", choices=("all", *PROFILES), default="all")
     parser.add_argument("--noise-figure-db", type=float, default=DEFAULT_NOISE_FIGURE_DB)
     parser.add_argument("--seed", type=int, default=20260717)

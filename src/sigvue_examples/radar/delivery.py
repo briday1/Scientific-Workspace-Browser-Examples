@@ -17,7 +17,16 @@ class BufferedDelivery(Delivery[LfmCollection, LfmInput]):
 
     def prepare(self, collection: LfmCollection, ui: DeliveryContext) -> LfmInput:
         default_pri = 1 / collection.ota_prf_hz
-        buffer_seconds = ui.number("buffer_seconds", default=0.02, minimum=default_pri, maximum=0.1, step=default_pri)
+        available = collection.sample_count("ota")
+        recording_seconds = available / collection.sample_rate
+        default_buffer_seconds = min(0.02, max(default_pri, recording_seconds / 4))
+        buffer_seconds = ui.number(
+            "buffer_seconds",
+            default=default_buffer_seconds,
+            minimum=min(default_pri, recording_seconds),
+            maximum=max(min(default_pri, recording_seconds), min(0.1, recording_seconds)),
+            step=default_pri,
+        )
         processing_pri_seconds = ui.number(
             "processing_pri_seconds",
             label="Processing PRI (s)",
@@ -27,11 +36,10 @@ class BufferedDelivery(Delivery[LfmCollection, LfmInput]):
             step=default_pri / 10,
         )
         seek_seconds = ui.number("seek_seconds", default=0.01, minimum=0.001, step=0.001)
-        refresh_seconds = ui.number("refresh_seconds", default=0.15, minimum=0.05, step=0.05)
-        available = collection.sample_count("ota")
+        refresh_seconds = ui.number("refresh_seconds", default=1.0, minimum=0.1, step=0.1)
         size = min(available, max(1, round(buffer_seconds * collection.sample_rate)))
         pri = min(size, max(8, round(collection.sample_rate * processing_pri_seconds)))
-        duration = max(0.0, (available - size) / collection.sample_rate)
+        duration = available / collection.sample_rate
         time = ui.playback(
             mode=self.playback_mode,
             duration=duration,
@@ -64,7 +72,18 @@ class WholeFileDelivery(Delivery[LfmCollection, LfmInput]):
 
 def _input(collection: LfmCollection, *, start: int, count: int, pri: int, ui: DeliveryContext) -> LfmInput:
     calibration = ui.once("lfm-calibration-counts", lambda: collection.read("calibration"))
-    noise = ui.once("lfm-noise-counts", lambda: collection.read("terminated-noise"))
+    noise = (
+        calibration
+        if _same_recordings(collection, "calibration", "terminated-noise")
+        else ui.once("lfm-noise-counts", lambda: collection.read("terminated-noise"))
+    )
+    ota = (
+        calibration
+        if start == 0
+        and count == collection.sample_count("ota")
+        and _same_recordings(collection, "calibration", "ota")
+        else collection.read("ota", start, count)
+    )
     annotation_path = collection.members["ota"][0].metadata_path
     current_annotations = read_sigmf_annotations(load_recording(annotation_path)) if annotation_path.is_file() else ()
     return LfmInput(
@@ -75,8 +94,16 @@ def _input(collection: LfmCollection, *, start: int, count: int, pri: int, ui: D
         start_sample=start,
         calibration_counts=calibration,
         noise_counts=noise,
-        ota_counts=collection.read("ota", start, count),
+        ota_counts=ota,
         annotations=current_annotations,
+    )
+
+
+def _same_recordings(collection: LfmCollection, left: str, right: str) -> bool:
+    return tuple(
+        (member.metadata_path, member.data_path) for member in collection.members[left]
+    ) == tuple(
+        (member.metadata_path, member.data_path) for member in collection.members[right]
     )
 
 

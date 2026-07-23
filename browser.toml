@@ -9,6 +9,7 @@ id = "digital-comms"
 name = "Digital Communications"
 [workspaces.config]
 data_root = "./data/comms"
+filename = "*.sigmf-meta"
 
 [[workspaces]]
 use = "waterfall"
@@ -55,9 +56,9 @@ data_root = "./data/lte"
 filename = "*.sigmf-meta"
 
 [[workspaces]]
-use = "lfm-live"
+use = "lfm-sigmf"
 path = "."
-id = "lfm-live"
-name = "LFM Live View"
+id = "lfm-sigmf"
+name = "LFM SigMF View"
 [workspaces.config]
-data_root = "./data/lfm-live"
+data_root = "./data/lfm-sigmf"

@@ -42,6 +42,7 @@ class SigMFRecording:
         scalar_type, scalar_bytes, scale = {
             "cf32_le": ("<f4", 4, 1.0),
             "ci16_le": ("<i2", 2, 1.0 / 32768.0),
+            "sc16_le": ("<i2", 2, 1.0 / 32768.0),
         }[self.datatype]
         scalars_per_frame = self.channel_count * 2
         with self.data_path.open("rb") as stream:
@@ -82,10 +83,10 @@ def load_recording(
     metadata = load_metadata(metadata_path)
     global_metadata = metadata["global"]
     datatype = str(global_metadata.get("core:datatype"))
-    scalar_bytes = {"cf32_le": 4, "ci16_le": 2}.get(datatype)
+    scalar_bytes = {"cf32_le": 4, "ci16_le": 2, "sc16_le": 2}.get(datatype)
     if scalar_bytes is None:
         raise ValueError(f"Unsupported SigMF datatype: {datatype}")
-    channel_count = int(global_metadata.get("core:num_channels", 1))
+    channel_count = int(global_metadata.get("core:num_channels") or 1)
     raw_sample_rate = global_metadata.get("core:sample_rate")
     if raw_sample_rate is None and sample_rate_fallback is None:
         raise ValueError(f"{metadata_path.name} does not define core:sample_rate")

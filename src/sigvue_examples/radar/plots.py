@@ -21,6 +21,20 @@ def _channel_colors(channel_count: int) -> tuple[str, ...]:
     return hsv_channel_colors(channel_count)
 
 
+def _downsample_xy(
+    x: np.ndarray,
+    y: np.ndarray,
+    max_points: int | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select evenly spaced render points without changing analysis arrays."""
+    x_values = np.asarray(x)
+    y_values = np.asarray(y)
+    if max_points is None or x_values.size <= max_points:
+        return x_values, y_values
+    indexes = np.linspace(0, x_values.size - 1, max_points, dtype=np.int64)
+    return x_values[indexes], y_values[indexes]
+
+
 def _rgba(color: str, alpha: float) -> str:
     value = color.lstrip("#")
     red, green, blue = (int(value[index : index + 2], 16) for index in (0, 2, 4))
@@ -48,6 +62,7 @@ def _phase_figure(
     calibration: Calibration,
     sample_rate: float,
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     figure = make_subplots(
         rows=2,
@@ -58,6 +73,10 @@ def _phase_figure(
     )
     subset = counts[:, :512]
     time_us = np.arange(subset.shape[1]) / sample_rate * 1e6
+    if max_points is not None and subset.shape[1] > max_points:
+        indexes = np.linspace(0, subset.shape[1] - 1, max_points, dtype=np.int64)
+        subset = subset[:, indexes]
+        time_us = time_us[indexes]
     aligned = subset * np.exp(-1j * calibration.phase_offsets)[:, None]
     colors = _channel_colors(subset.shape[0])
     for channel in range(subset.shape[0]):
@@ -82,6 +101,7 @@ def _amplitude_figure(
     data: LfmInput,
     calibration: Calibration,
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     figure = make_subplots(
         rows=2,
@@ -94,9 +114,11 @@ def _amplitude_figure(
     for channel in range(subset.shape[0]):
         power = _db10((np.abs(subset[channel]) ** 2 / (2 * R_OHMS)) / 1e-3)
         frequency, psd = _single_psd(subset[channel], data.sample_rate)
+        plot_time, plot_power = _downsample_xy(time_us, power, max_points)
+        plot_frequency, plot_psd = _downsample_xy(frequency, psd, max_points)
         line = {"color": colors[channel]}
-        figure.add_trace(go.Scatter(x=time_us, y=power, name=f"Channel {channel + 1}", line=line), row=1, col=1)
-        figure.add_trace(go.Scatter(x=frequency, y=psd, name=f"Channel {channel + 1}", line=line, showlegend=False), row=2, col=1)
+        figure.add_trace(go.Scatter(x=plot_time, y=plot_power, name=f"Channel {channel + 1}", line=line), row=1, col=1)
+        figure.add_trace(go.Scatter(x=plot_frequency, y=plot_psd, name=f"Channel {channel + 1}", line=line, showlegend=False), row=2, col=1)
     figure.add_trace(go.Scatter(x=[time_us[0], time_us[-1]], y=[data.calibration_dbm] * 2, name="Incident power", line={"color": ORANGE, "dash": "dash"}), row=1, col=1)
     figure.update_xaxes(title_text="Time (us)", row=1, col=1)
     figure.update_xaxes(title_text="Frequency (Hz)", row=2, col=1)
@@ -115,6 +137,7 @@ def _noise_figure(
     data: LfmInput,
     calibration: Calibration,
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     figure = make_subplots(
         rows=2,
@@ -127,9 +150,11 @@ def _noise_figure(
     for channel in range(subset.shape[0]):
         power = _db10((np.abs(subset[channel]) ** 2 / (2 * R_OHMS)) / 1e-3)
         frequency, psd = _averaged_psd(channels[channel], data.sample_rate)
+        plot_time, plot_power = _downsample_xy(time_us, power, max_points)
+        plot_frequency, plot_psd = _downsample_xy(frequency, psd, max_points)
         line = {"color": colors[channel]}
-        figure.add_trace(go.Scatter(x=time_us, y=power, name=f"Channel {channel + 1}", line=line), row=1, col=1)
-        figure.add_trace(go.Scatter(x=frequency, y=psd, name=f"Channel {channel + 1}", line=line, showlegend=False), row=2, col=1)
+        figure.add_trace(go.Scatter(x=plot_time, y=plot_power, name=f"Channel {channel + 1}", line=line), row=1, col=1)
+        figure.add_trace(go.Scatter(x=plot_frequency, y=plot_psd, name=f"Channel {channel + 1}", line=line, showlegend=False), row=2, col=1)
     for channel in range(subset.shape[0]):
         figure.add_trace(go.Scatter(x=[-data.sample_rate / 2, data.sample_rate / 2], y=[calibration.noise_psd_dbm_hz[channel]] * 2, name=f"Ch {channel + 1} measured floor", line={"dash": "dot"}), row=2, col=1)
     figure.update_xaxes(title_text="Time (us)", row=1, col=1)
@@ -329,6 +354,7 @@ def _time_figure(
     calibration: Calibration,
     trace_styles: dict[str, TraceStyle],
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     channel_count = products.time_mean_dbm.shape[0]
     grid = channel_grid(channel_count)
@@ -348,10 +374,11 @@ def _time_figure(
             (np.full(x.size, calibration.full_scale_dbm[channel]), "Full scale", trace_styles["full_scale"]),
         )
         for y, name, trace_style in traces:
+            plot_x, plot_y = _downsample_xy(x, y, max_points)
             figure.add_trace(
                 go.Scatter(
-                    x=x,
-                    y=y,
+                    x=plot_x,
+                    y=plot_y,
                     name=name,
                     mode=trace_style.mode,
                     line=trace_style.line,
@@ -371,6 +398,7 @@ def _combined_time_figure(
     aggregation: str,
     trace_styles: dict[str, TraceStyle],
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     values = products.time_max_dbm if aggregation == "max" else products.time_mean_dbm
     label = "Max hold" if aggregation == "max" else "Mean"
@@ -383,6 +411,7 @@ def _combined_time_figure(
         "Average noise power",
         trace_styles[aggregation],
         trace_styles,
+        max_points,
     )
     figure.update_xaxes(title_text="Fast time (us)")
     figure.update_yaxes(title_text="Power (dBm)")
@@ -393,6 +422,7 @@ def _frequency_figure(
     calibration: Calibration,
     trace_styles: dict[str, TraceStyle],
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     channel_count = products.psd_mean_dbm_hz.shape[0]
     grid = channel_grid(channel_count)
@@ -412,10 +442,11 @@ def _frequency_figure(
             (np.full(x.size, calibration.full_scale_dbm[channel]), "Full scale", trace_styles["full_scale"]),
         )
         for y, name, trace_style in traces:
+            plot_x, plot_y = _downsample_xy(x, y, max_points)
             figure.add_trace(
                 go.Scatter(
-                    x=x,
-                    y=y,
+                    x=plot_x,
+                    y=plot_y,
                     name=name,
                     mode=trace_style.mode,
                     line=trace_style.line,
@@ -435,6 +466,7 @@ def _combined_frequency_figure(
     aggregation: str,
     trace_styles: dict[str, TraceStyle],
     theme: str,
+    max_points: int | None = None,
 ) -> go.Figure:
     values = products.psd_max_dbm_hz if aggregation == "max" else products.psd_mean_dbm_hz
     label = "Max hold" if aggregation == "max" else "Mean"
@@ -447,6 +479,7 @@ def _combined_frequency_figure(
         "Average noise PSD",
         trace_styles[aggregation],
         trace_styles,
+        max_points,
     )
     figure.update_xaxes(title_text="Frequency (Hz)")
     figure.update_yaxes(title_text="PSD (dBm/Hz)")
@@ -461,15 +494,17 @@ def _combined_channel_figure(
     noise_label: str,
     value_style: TraceStyle,
     trace_styles: dict[str, TraceStyle],
+    max_points: int | None = None,
 ) -> go.Figure:
     """Overlay channel results with shared post-calibration references."""
     figure = go.Figure()
     for channel, color in enumerate(_channel_colors(values.shape[0])):
         channel_name = f"Channel {channel + 1}"
+        plot_x, plot_y = _downsample_xy(x, values[channel], max_points)
         figure.add_trace(
             go.Scatter(
-                x=x,
-                y=values[channel],
+                x=plot_x,
+                y=plot_y,
                 name=f"{channel_name} {value_label}",
                 mode=value_style.mode,
                 line={**value_style.line, "color": value_style.color_with_opacity(color)},
@@ -481,10 +516,11 @@ def _combined_channel_figure(
         (noise_value, noise_label, trace_styles["noise"]),
         (full_scale_value, "Full scale", trace_styles["full_scale"]),
     ):
+        plot_x, plot_y = _downsample_xy(x, np.full(x.size, reference), max_points)
         figure.add_trace(
             go.Scatter(
-                x=x,
-                y=np.full(x.size, reference),
+                x=plot_x,
+                y=plot_y,
                 name=reference_label,
                 mode="lines",
                 line=reference_style.line,

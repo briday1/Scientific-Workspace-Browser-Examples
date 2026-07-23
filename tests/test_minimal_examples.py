@@ -37,7 +37,7 @@ class MinimalExampleTests(unittest.TestCase):
                 "acoustic-events-segmented",
                 "radio-astronomy-rfi",
                 "lte-recordings",
-                "lfm-live",
+                "lfm-sigmf",
             ],
             identifiers,
         )

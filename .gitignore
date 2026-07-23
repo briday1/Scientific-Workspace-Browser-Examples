@@ -6,6 +6,8 @@ __pycache__/
 build/
 dist/
 logs/
+.edge-debug/
+.edge-progressive-debug/
 
 # All example recordings are generated locally and never committed.
 data/

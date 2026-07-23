@@ -88,14 +88,18 @@ python scripts/generate_comms.py
 python scripts/generate_segmented_results.py
 ```
 
-Both LFM collections stay local. Generate the original 10 MHz and newer 2 MHz
-multi-target recordings together with:
+The LFM SigMF workspace reads both field captures and generated calibrated
+collections from `data/lfm-sigmf`. Generate the 10 MHz and 2 MHz multi-target
+collections together with:
 
 ```bash
 python scripts/generate_lfm_collection.py
 ```
 
 Pass `--profile 10mhz` or `--profile 2mhz` to generate only one collection.
+The generated manifests use standard SigMF `core:streams` entries plus the
+`lfm` extension metadata needed to identify calibration, terminated-noise, and
+OTA roles.
 
 Download the LTE downlink and uplink SigMF metadata and recordings from Daniel Estévez's
 [LTE data directory](http://nas.destevez.net/~daniel/LTE/) with:

@@ -64,89 +64,83 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
         step=1.0,
         group="Waterfall display",
     )
-    with ui.details_group("Raster rendering"):
-        waterfall_render = {
-            "render_width": int(ui.select(
-                "lfm_waterfall_render_width",
-                label="Heatmap render width",
-                default=1024,
-                options=(256, 512, 1024, 2048),
-            )),
-            "render_height": int(ui.select(
-                "lfm_waterfall_render_height",
-                label="Heatmap render height",
-                default=512,
-                options=(128, 256, 512, 1024),
-            )),
-            "render_aggregation": str(ui.select(
-                "lfm_waterfall_render_aggregation",
-                label="Heatmap aggregation",
-                default="mean",
-                options=("max", "mean", "median"),
-            )),
-        }
+    many_channels = products.time_waterfall_dbm.shape[0] > 8
+    waterfall_render = {
+        "render_width": int(ui.select(
+            "lfm_waterfall_render_width",
+            label="Heatmap render width",
+            default=256 if many_channels else 1024,
+            options=(256, 512, 1024, 2048),
+            group="Raster rendering",
+        )),
+        "render_height": int(ui.select(
+            "lfm_waterfall_render_height",
+            label="Heatmap render height",
+            default=128 if many_channels else 512,
+            options=(128, 256, 512, 1024),
+            group="Raster rendering",
+        )),
+        "render_aggregation": str(ui.select(
+            "lfm_waterfall_render_aggregation",
+            label="Heatmap aggregation",
+            default="mean",
+            options=("max", "mean", "median"),
+            group="Raster rendering",
+        )),
+    }
+    line_render_points = ui.render_points(
+        "lfm_line_render_points",
+        label="Maximum line points",
+        default=1024 if many_channels else 2048,
+        minimum=128,
+        maximum=8192,
+        step=128,
+        group="Raster rendering",
+    )
 
     with ui.tab("Waterfall"):
-        waterfall_views = {
-            ("Fast-time power", "All"): _waterfall_figure(
-                products,
-                "time",
-                ui.theme,
-                waterfall_colormap,
-                time_waterfall_limits,
-                annotations=data.annotations,
-                window_start_seconds=data.start_sample / data.sample_rate,
-                annotation_style=annotation_style,
-                show_annotations=show_annotations,
-                viewport=ui.plot_viewport("waterfall-domain-0"),
-                **waterfall_render,
-            ),
-            ("Frequency PSD", "All"): _waterfall_figure(
-                products,
-                "frequency",
-                ui.theme,
-                waterfall_colormap,
-                psd_waterfall_limits,
-                annotations=data.annotations,
-                window_start_seconds=data.start_sample / data.sample_rate,
-                annotation_style=annotation_style,
-                show_annotations=show_annotations,
-                viewport=ui.plot_viewport("waterfall-domain-1"),
-                **waterfall_render,
-            ),
-        }
-        for channel in range(products.time_waterfall_dbm.shape[0]):
-            channel_label = f"Ch{channel + 1}"
-            waterfall_views[("Fast-time power", channel_label)] = _waterfall_figure(
-                products,
-                "time",
-                ui.theme,
-                waterfall_colormap,
-                time_waterfall_limits,
-                annotations=data.annotations,
-                window_start_seconds=data.start_sample / data.sample_rate,
-                annotation_style=annotation_style,
-                show_annotations=show_annotations,
-                selected_channel=channel,
-                viewport=ui.plot_viewport(f"waterfall-domain-{2 + channel * 2}"),
-                **waterfall_render,
+        waterfall_views = {}
+        channel_choices = (
+            *((f"Ch{channel + 1}", channel) for channel in range(products.time_waterfall_dbm.shape[0])),
+            ("Multi", None),
+        )
+        for channel_index, (channel_label, channel) in enumerate(channel_choices):
+            time_view_key = f"waterfall-domain-{2 * channel_index}"
+            frequency_view_key = f"waterfall-domain-{2 * channel_index + 1}"
+            waterfall_views[("Fast-time power", channel_label)] = (
+                lambda selected=channel, view_key=time_view_key: _waterfall_figure(
+                    products,
+                    "time",
+                    ui.theme,
+                    waterfall_colormap,
+                    time_waterfall_limits,
+                    annotations=data.annotations,
+                    window_start_seconds=data.start_sample / data.sample_rate,
+                    annotation_style=annotation_style,
+                    show_annotations=show_annotations,
+                    selected_channel=selected,
+                    viewport=ui.plot_viewport(view_key),
+                    **waterfall_render,
+                )
             )
-            waterfall_views[("Frequency PSD", channel_label)] = _waterfall_figure(
-                products,
-                "frequency",
-                ui.theme,
-                waterfall_colormap,
-                psd_waterfall_limits,
-                annotations=data.annotations,
-                window_start_seconds=data.start_sample / data.sample_rate,
-                annotation_style=annotation_style,
-                show_annotations=show_annotations,
-                selected_channel=channel,
-                viewport=ui.plot_viewport(f"waterfall-domain-{3 + channel * 2}"),
-                **waterfall_render,
+            waterfall_views[("Frequency PSD", channel_label)] = (
+                lambda selected=channel, view_key=frequency_view_key: _waterfall_figure(
+                    products,
+                    "frequency",
+                    ui.theme,
+                    waterfall_colormap,
+                    psd_waterfall_limits,
+                    annotations=data.annotations,
+                    window_start_seconds=data.start_sample / data.sample_rate,
+                    annotation_style=annotation_style,
+                    show_annotations=show_annotations,
+                    selected_channel=selected,
+                    viewport=ui.plot_viewport(view_key),
+                    **waterfall_render,
+                )
             )
         ui.view_switcher(
-            ("Domain", "Channels"),
+            ("Domain", "Channel"),
             waterfall_views,
             key="waterfall-domain",
             selector=("buttons", "dropdown"),
@@ -156,9 +150,9 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
         ui.view_switcher(
             "View",
             {
-                "Multi": _time_figure(products, calibration, trace_styles, ui.theme),
-                "Combined max": _combined_time_figure(products, calibration, "max", trace_styles, ui.theme),
-                "Combined mean": _combined_time_figure(products, calibration, "mean", trace_styles, ui.theme),
+                "Multi": lambda: _time_figure(products, calibration, trace_styles, ui.theme, line_render_points),
+                "Combined max": lambda: _combined_time_figure(products, calibration, "max", trace_styles, ui.theme, line_render_points),
+                "Combined mean": lambda: _combined_time_figure(products, calibration, "mean", trace_styles, ui.theme, line_render_points),
             },
             key="time-view",
             selector="buttons",
@@ -167,9 +161,9 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
         ui.view_switcher(
             "View",
             {
-                "Multi": _frequency_figure(products, calibration, trace_styles, ui.theme),
-                "Combined max": _combined_frequency_figure(products, calibration, "max", trace_styles, ui.theme),
-                "Combined mean": _combined_frequency_figure(products, calibration, "mean", trace_styles, ui.theme),
+                "Multi": lambda: _frequency_figure(products, calibration, trace_styles, ui.theme, line_render_points),
+                "Combined max": lambda: _combined_frequency_figure(products, calibration, "max", trace_styles, ui.theme, line_render_points),
+                "Combined mean": lambda: _combined_frequency_figure(products, calibration, "mean", trace_styles, ui.theme, line_render_points),
             },
             key="frequency-view",
             selector="buttons",
@@ -181,7 +175,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                     ui.place_parameters("phase_reference", label="Calibration parameters")
                     ui.table(results.phase_rows, key="phase-diagnostics", depends_on=("phase_reference",))
                 ui.plot(
-                    lambda: _phase_figure(data.calibration_counts, calibration, data.sample_rate, ui.theme),
+                    lambda: _phase_figure(data.calibration_counts, calibration, data.sample_rate, ui.theme, line_render_points),
                     key="phase-plot",
                     depends_on=("phase_reference",),
                 )
@@ -203,7 +197,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                         depends_on=("amplitude_reference", "adc_bits"),
                     )
                 ui.plot(
-                    lambda: _amplitude_figure(results.calibrated_tone, data, calibration, ui.theme),
+                    lambda: _amplitude_figure(results.calibrated_tone, data, calibration, ui.theme, line_render_points),
                     key="amplitude-plot",
                     depends_on=("amplitude_reference", "adc_bits"),
                 )
@@ -216,12 +210,16 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                         depends_on=("reference_noise_psd_dbm_hz",),
                     )
                 ui.plot(
-                    lambda: _noise_figure(results.calibrated_noise, data, calibration, ui.theme),
+                    lambda: _noise_figure(results.calibrated_noise, data, calibration, ui.theme, line_render_points),
                     key="noise-plot",
                 )
 
-    ui.stat("Samples delivered", f"{data.ota_counts.shape[1]:,}")
-    ui.stat("Buffer memory", format_bytes(data.ota_counts.nbytes))
+    input_arrays = (data.calibration_counts, data.noise_counts, data.ota_counts)
+    resident_input_bytes = sum(array.nbytes for array in {id(value): value for value in input_arrays}.values())
+    ui.stat("Channels delivered", f"{data.ota_counts.shape[0]:,}")
+    ui.stat("Samples per channel", f"{data.ota_counts.shape[1]:,}")
+    ui.stat("Complex samples delivered", f"{data.ota_counts.size:,}")
+    ui.stat("Input buffer memory", format_bytes(resident_input_bytes))
     ui.stat("Duration delivered", f"{data.ota_counts.shape[1] / data.sample_rate:g} s")
     ui.stat("Processing PRI", f"{data.pri_samples / data.sample_rate:g} s")
     ui.stat("Sample rate", f"{data.sample_rate / 1e6:g} MHz")
