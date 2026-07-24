@@ -108,6 +108,7 @@ class RealDataWorkspaceTests(unittest.TestCase):
                     "weather_radar_colormap": "Turbo",
                 },
             )
+            advanced_histogram = advanced.page.views[1].callback({})
 
         self.assertTrue(workspace.lazy_views)
         self.assertEqual(1, len(resources))
@@ -141,6 +142,12 @@ class RealDataWorkspaceTests(unittest.TestCase):
         self.assertGreater(histogram.layout.yaxis.range[1], max(histogram.data[0].y))
         self.assertFalse(histogram.layout.xaxis.autorange)
         self.assertFalse(histogram.layout.yaxis.autorange)
+        self.assertTrue(histogram.layout.xaxis.fixedrange)
+        self.assertTrue(histogram.layout.yaxis.fixedrange)
+        self.assertEqual(
+            tuple(histogram.layout.yaxis.range),
+            tuple(advanced_histogram.layout.yaxis.range),
+        )
         self.assertIn("Buffer memory", opened.page.statistics)
         self.assertEqual(
             "512 × 512 source → 256 E/W × 256 N/S raster · max",

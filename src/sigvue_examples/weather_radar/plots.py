@@ -231,12 +231,17 @@ def histogram_figure(
     increment = products.scan.header.value_increment_dbz
     measured_min = products.scan.header.minimum_value_dbz
     measured_max = measured_min + (255 - FIRST_MEASURED_CODE) * increment
-    maximum_count = (
-        int(np.max(products.histogram_counts))
-        if products.histogram_counts.size
-        else 0
+    # A histogram bin can never contain more gates than the inflated packet
+    # contains bytes.  The sequence-wide maximum is therefore a conservative,
+    # metadata-only bound that remains identical while stepping through scans;
+    # importantly, it does not require eagerly decoding the entire sequence.
+    count_upper = max(
+        1,
+        max(
+            header.uncompressed_payload_bytes
+            for header in products.selection.sequence.headers
+        ),
     )
-    count_upper = max(1, int(np.ceil(maximum_count * 1.08)))
     figure = go.Figure(
         go.Bar(
             x=products.histogram_dbz,
@@ -251,19 +256,28 @@ def histogram_figure(
         title_text="Exact native reflectivity (dBZ)",
         range=[measured_min - increment / 2, measured_max + increment / 2],
         autorange=False,
+        fixedrange=True,
     )
     figure.update_yaxes(
         title_text="Gate count",
         range=[0, count_upper],
         autorange=False,
         rangemode="tozero",
+        fixedrange=True,
     )
-    return style_plotly(
+    styled = style_plotly(
         figure,
         title="Measured-gate reflectivity distribution",
         theme=theme,
         boxed_axes=True,
     )
+    styled.update_layout(
+        uirevision=(
+            "weather-radar-distribution:"
+            f"{products.scan.header.scan_time.isoformat()}"
+        )
+    )
+    return styled
 
 
 __all__ = [

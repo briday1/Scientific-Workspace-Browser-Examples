@@ -85,3 +85,14 @@ category = "weather"
 tags = ["NEXRAD", "weather radar", "reflectivity", "real data"]
 [workspaces.config]
 data_root = "./data/weather-radar"
+
+[[workspaces]]
+use = "noaa-passive-acoustics"
+path = "."
+id = "noaa-passive-acoustics"
+name = "NOAA Passive Acoustics"
+description = "Real SanctSound blue-whale hydrophone clips with progressive spectrograms."
+category = "ocean acoustics"
+tags = ["NOAA", "SanctSound", "hydrophone", "blue whale", "real data"]
+[workspaces.config]
+data_root = "./data/passive-acoustics"

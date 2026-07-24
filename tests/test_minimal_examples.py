@@ -66,6 +66,7 @@ class MinimalExampleTests(unittest.TestCase):
                 "lte-recordings",
                 "lfm-sigmf",
                 "weather-radar",
+                "noaa-passive-acoustics",
             ],
             identifiers,
         )

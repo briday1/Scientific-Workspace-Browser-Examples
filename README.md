@@ -3,7 +3,7 @@
 [![Test examples](https://github.com/briday1/sigvue-examples/actions/workflows/test.yml/badge.svg)](https://github.com/briday1/sigvue-examples/actions/workflows/test.yml)
 
 External, file-backed examples for [Sigvue](https://github.com/briday1/sigvue),
-covering signal recordings, annotated physiology, and weather radar.
+covering signal recordings, annotated physiology, weather radar, and ocean acoustics.
 The repository keeps domain-specific analysis and presentation code small by
 building on a packaged layer of reusable concrete plugin components.
 
@@ -98,6 +98,7 @@ If a workspace does not configure a capability, Sigvue omits its menu.
 - **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset and inspect a selected interval with the bundled example's average-spectrum and waterfall presentation.
 - **LFM SigMF View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface. Analysis stays at full slow-time, fast-time, and frequency resolution while a separate Raster rendering box controls only the browser image resolution and exact block statistic.
 - **Weather Radar** — choose the TLX or FDR radar and step through 141 real NOAA NEXRAD Level III super-resolution base-reflectivity scans spanning a dense two-hour storm window using segmented previous/next time navigation. The plan-position display offers a visual eleven-option colormap picker—including the custom NEXRAD scale—alongside a native-gate distribution summary and exact product metadata.
+- **NOAA Passive Acoustics** — inspect two compact, labeled SanctSound MB01 blue-whale call clips from NOAA's public Passive Acoustic Data Archive using a progressive Portland spectrogram, waveform, average PSD, and source metadata.
 
 Every workspace is backed by files, but generated data is not committed.
 
@@ -141,6 +142,7 @@ combined—with:
 ```bash
 python scripts/download_mit_bih_ecg.py
 python scripts/download_weather_radar.py
+python scripts/download_passive_acoustics.py
 ```
 
 The ECG downloader pins records 100, 101, 200, and 207 from the
@@ -161,6 +163,11 @@ Pass `--radars TLX` or `--radars FDR` to download only one sequence.
 Use `--workers 1` for sequential downloading.
 NOAA data disseminated through NODD is open to public use, with attribution
 requested.
+
+The passive-acoustics downloader pins the official accelerated blue-whale
+A-call and B-call clips from NOAA's SanctSound MB01 deployment, verifies their
+sizes and SHA-256 checksums, retains the source WAV files, and creates ranged
+SigMF companions for the workspace. The pair is under 2 MB.
 
 The LFM SigMF workspace reads both field captures and generated calibrated
 collections from `data/lfm-sigmf`. Generate the four-channel 10 MHz, sixteen-channel
