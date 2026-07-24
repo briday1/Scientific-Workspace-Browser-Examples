@@ -100,7 +100,11 @@ class CopyablePipelineTests(unittest.TestCase):
             self.assertEqual(heatmap_grid_color("light"), figure.layout.yaxis2.gridcolor)
             self.assertEqual(0.35, figure.layout.xaxis2.gridwidth)
 
-            metadata_path = next(root.glob("**/*.sigmf-meta"))
+            metadata_path = next(
+                path
+                for path in root.glob("**/*.sigmf-meta")
+                if path.parent.name == "downlink"
+            )
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             metadata["annotations"] = [{
                 "core:sample_start": 10_000,
