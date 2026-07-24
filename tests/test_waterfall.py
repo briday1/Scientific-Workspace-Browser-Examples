@@ -9,6 +9,12 @@ import plotly.graph_objects as go
 
 from scripts.generate_minimal_sigmf import qam16, qpsk, write_sigmf
 from scripts.generate_test_lte import generate as generate_lte
+from sigvue_examples.plugins import CallableAnalysis, CallablePresentation
+from sigvue_examples.plugins.sigmf import (
+    SIGMF_DISCOVERY_COLUMNS,
+    SigMFExporter,
+    WindowedSigMFDelivery,
+)
 from sigvue_examples.comms.workspace import create_workspace as create_comms_workspace
 from sigvue_examples.style import heatmap_grid_color
 from sigvue_examples.waterfall.workspace import create_workspace as create_waterfall_workspace
@@ -33,6 +39,11 @@ class CopyablePipelineTests(unittest.TestCase):
             })
 
             workspace = create_comms_workspace({"data_root": root, "filename": "*.sigmf-meta"})
+            self.assertIsInstance(workspace.delivery, WindowedSigMFDelivery)
+            self.assertIsInstance(workspace.analysis, CallableAnalysis)
+            self.assertIsInstance(workspace.presentation, CallablePresentation)
+            self.assertIsInstance(workspace.exporter, SigMFExporter)
+            self.assertEqual(SIGMF_DISCOVERY_COLUMNS, workspace.discovery_columns)
             items = workspace.discover_items()
             self.assertEqual({"Synthetic QPSK", "Synthetic 16-QAM"}, {item.title for item in items})
             for item in items:
@@ -54,6 +65,11 @@ class CopyablePipelineTests(unittest.TestCase):
             root = Path(directory)
             generate_lte(root)
             workspace = create_waterfall_workspace({"data_root": root})
+            self.assertIsInstance(workspace.delivery, WindowedSigMFDelivery)
+            self.assertIsInstance(workspace.analysis, CallableAnalysis)
+            self.assertIsInstance(workspace.presentation, CallablePresentation)
+            self.assertIsInstance(workspace.exporter, SigMFExporter)
+            self.assertEqual(SIGMF_DISCOVERY_COLUMNS, workspace.discovery_columns)
             items = workspace.discover_items()
             self.assertEqual(2, len(items))
 
@@ -94,12 +110,17 @@ class CopyablePipelineTests(unittest.TestCase):
                 "core:freq_upper_edge": 805_000_000.0,
             }]
             metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-            annotated = workspace.open_item(metadata_path.stem.removesuffix(".sigmf"))
+            annotated_id = next(
+                item.identifier
+                for item in workspace.discover_items()
+                if Path(item.source_reference).resolve() == metadata_path.resolve()
+            )
+            annotated = workspace.open_item(annotated_id)
             self.assertEqual(1, len(annotated.page.annotation.discover_callback()))
             annotated_figure = annotated.page.views[0].callback({})
             annotation_traces = [trace for trace in annotated_figure.data if trace.name == "Annotations"]
             self.assertEqual(1, len(annotation_traces))
-            self.assertEqual("scattergl", annotation_traces[0].type)
+            self.assertEqual("scatter", annotation_traces[0].type)
             self.assertEqual(
                 [803.0, 805.0, 805.0, 803.0, 803.0, None],
                 list(annotation_traces[0].x),
@@ -138,6 +159,52 @@ class CopyablePipelineTests(unittest.TestCase):
             opened = workspace.open_item(workspace.discover_items()[0].identifier)
             self.assertIsNotNone(opened.page.annotation)
             self.assertEqual((), opened.page.annotation.discover_callback())
+
+    def test_waterfall_keeps_annotations_inside_visible_half_bin_edges(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            generate_lte(root)
+            workspace = create_waterfall_workspace({"data_root": root})
+            item = workspace.discover_items()[0]
+            initial = workspace.open_item(item.identifier)
+            initial_figure = initial.page.views[0].callback({})
+            visible_left = float(initial_figure.layout.xaxis2.range[0])
+            first_center = float(initial_figure.data[0].x[0])
+            edge_lower = visible_left + 0.2 * (first_center - visible_left)
+            edge_upper = visible_left + 0.8 * (first_center - visible_left)
+            self.assertLess(visible_left, edge_lower)
+            self.assertLess(edge_upper, first_center)
+
+            metadata_path = Path(item.source_reference)
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["annotations"] = [
+                {
+                    "core:sample_start": 1_000,
+                    "core:sample_count": 2_000,
+                    "core:comment": "Visible edge annotation",
+                    "core:freq_lower_edge": edge_lower * 1e6,
+                    "core:freq_upper_edge": edge_upper * 1e6,
+                }
+            ]
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            annotated = workspace.open_item(item.identifier)
+            figure = annotated.page.views[0].callback({})
+            trace = next(
+                trace
+                for trace in figure.data
+                if trace.name == "Annotations"
+            )
+            np.testing.assert_allclose(
+                list(trace.x)[:5],
+                [
+                    edge_lower,
+                    edge_upper,
+                    edge_upper,
+                    edge_lower,
+                    edge_lower,
+                ],
+            )
 
     def test_lazy_comms_workspace_only_builds_the_selected_tab(self):
         with TemporaryDirectory() as directory:

@@ -3,29 +3,22 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
 
+from sigvue_examples.plugins.sigmf import write_sigmf_recording
+
 
 def write_sigmf(root: Path, name: str, samples: np.ndarray, sample_rate: float, description: str, **extra) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    channels = 1 if samples.ndim == 1 else samples.shape[0]
-    frames = samples.reshape(1, -1).T if channels == 1 else samples.T
-    np.asarray(frames, dtype="<c8").tofile(root / f"{name}.sigmf-data")
-    metadata = {
-        "global": {
-            "core:datatype": "cf32_le",
-            "core:sample_rate": sample_rate,
-            "core:num_channels": channels,
-            "core:description": description,
-            **extra,
-        },
-        "captures": [{"core:sample_start": 0}],
-        "annotations": [],
-    }
-    (root / f"{name}.sigmf-meta").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    write_sigmf_recording(
+        root,
+        name,
+        samples,
+        sample_rate,
+        description=description,
+        global_metadata=extra,
+    )
 
 
 def modulated_recording(

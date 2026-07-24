@@ -2,9 +2,8 @@
 
 from sigvue.plugin import Delivery, DeliveryContext, PlaybackMode
 
-from ..io.sigmf.capabilities import read_sigmf_annotations
-from ..io.sigmf.recording import load_recording
-from .domain import LfmCollection, LfmInput
+from ..plugins.sigmf import load_sigmf_recording, read_sigmf_annotations
+from .models import LfmCollection, LfmInput
 
 
 class BufferedDelivery(Delivery[LfmCollection, LfmInput]):
@@ -85,7 +84,11 @@ def _input(collection: LfmCollection, *, start: int, count: int, pri: int, ui: D
         else collection.read("ota", start, count)
     )
     annotation_path = collection.members["ota"][0].metadata_path
-    current_annotations = read_sigmf_annotations(load_recording(annotation_path)) if annotation_path.is_file() else ()
+    current_annotations = (
+        read_sigmf_annotations(load_sigmf_recording(annotation_path))
+        if annotation_path.is_file()
+        else ()
+    )
     return LfmInput(
         sample_rate=collection.sample_rate,
         calibration_dbm=collection.calibration_dbm,

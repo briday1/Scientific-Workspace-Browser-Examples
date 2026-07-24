@@ -2,15 +2,16 @@
 
 [![Test examples](https://github.com/briday1/sigvue-examples/actions/workflows/test.yml/badge.svg)](https://github.com/briday1/sigvue-examples/actions/workflows/test.yml)
 
-External, file-backed examples for [Sigvue](https://github.com/briday1/sigvue). This repository deliberately keeps the small examples independent from the browser framework.
+External, file-backed examples for [Sigvue](https://github.com/briday1/sigvue).
+The repository keeps domain-specific analysis and presentation code small by
+building on a packaged layer of reusable concrete plugin components.
 
-Each pipeline is a directory that can be copied as a unit:
+Each domain pipeline stays focused, while shared plugin implementations are
+written once:
 
 ```text
 src/sigvue_examples/
 ├── comms/
-│   ├── source.py
-│   ├── delivery.py
 │   ├── analysis.py
 │   ├── plots.py
 │   ├── models.py
@@ -18,40 +19,68 @@ src/sigvue_examples/
 ├── events/
 ├── waterfall/
 ├── radar/
-├── io/sigmf/
-│   ├── recording.py
+│   ├── workspace.py
+│   ├── source.py
+│   ├── delivery.py
+│   ├── analysis.py
+│   ├── models.py
+│   ├── processing.py
+│   ├── plots.py
+│   ├── presentation.py
 │   └── capabilities.py
+├── plugins/
+│   ├── lifecycle.py
+│   ├── discovery.py
+│   ├── plotly.py
+│   └── sigmf/
+│       ├── recording.py
+│       ├── source.py
+│       ├── delivery.py
+│       ├── annotations.py
+│       ├── exports.py
+│       └── writer.py
 └── style/
     └── plotly.py
 ```
 
 Every `workspace.py` is the small framework boundary: it assembles a
-`Workspace` from that pipeline's `source`, `delivery`, `analysis`,
-`plots`, and optional `capabilities` modules. The copyable communications and
-waterfall examples keep their typed lifecycle values in a small `models.py`.
-Cross-pipeline code is limited to
-`io/sigmf` for ranged file access and SigMF capabilities, and
-`style` for Plotly appearance. Neither shared package chooses tabs, playback
-mode, parameters, or analysis behavior.
+`Workspace` from reusable infrastructure and the pipeline's ordinary analysis
+and presentation functions. Framework-neutral configuration parsing, byte
+formatting, and atomic download utilities remain in `sigvue.helpers`. Concrete
+components that implement `sigvue.plugin` contracts live with these examples
+in `sigvue_examples.plugins`, so they can evolve and ship as a reusable plugin
+layer without becoming framework internals.
 
-Each domain delivery explicitly subclasses the framework's typed `Delivery`—for
-example, `Delivery[SigMFRecording, WaterfallWindow]`. The first type is what
-the source opens, and the second is the value passed into workspace configuration
-and processing. This makes the source/delivery/processing boundary visible
-without putting browser semantics into the shared SigMF I/O module. Workspace
-assembly uses framework objects for every behavioral slot: `Workspace`,
-`Source`, optional `Delivery`, `Analysis`, `Presentation`, optional `Annotator`,
-and optional `Exporter`. There are no alternate constructor names or
-structurally inferred lifecycle objects.
+The `sigvue_examples.plugins.sigmf` package supplies drop-in discovery, ranged
+reading, window delivery, power overviews, annotation persistence, JSON/MAT
+export, and fixture writing. The parent `plugins` package supplies callable
+lifecycle adapters, standard signal discovery columns, and exact Plotly
+annotation-region rendering.
 
-`io/sigmf/capabilities.py` is an optional bridge from the shared I/O to Sigvue's
-optional `Annotator` and `Exporter` base objects. Capability-enabled workspaces write standard
-SigMF sample start/count, comment, generator, and UUID annotation fields. Waterfall
-workspaces also read and write standard lower/upper RF-frequency edges, populate editable
-bounds from the visible Plotly axes, and show in-view annotations as hoverable regions.
-They also let the plugin serialize the current buffer or full recording as JSON
-or MAT. If a workspace does not pass either capability, Sigvue shows neither
-menu.
+For example, the communications and waterfall workspaces compose
+`sigmf_source`, `WindowedSigMFDelivery`, `CallableAnalysis`,
+`CallablePresentation`, and `SigMFExporter` directly. Their modules only retain
+the settings, calculations, plots, and UI choices that are specific to that
+domain. The event example similarly wraps its custom JSON selection functions
+with the callable lifecycle adapters instead of defining one-method framework
+classes. `WorkspaceConfig` gives every workspace the same typed, profile-relative
+path handling.
+
+Domain packages use relative imports from `..plugins` and `..plugins.sigmf`;
+scripts and external consumers use `sigvue_examples.plugins`. This keeps the
+concrete source, delivery, annotation, and export implementations independent
+of any one domain while avoiding parallel copies across domains in this
+package. The smaller examples bundled with the Sigvue repository carry the
+same public helper surface under `example_pipelines.plugins`; that copy is
+deliberately local and copyable, while this one is installed as part of the
+standalone examples distribution.
+
+Capability-enabled workspaces write standard SigMF sample start/count, comment,
+generator, and UUID annotation fields. Waterfall workspaces also read and write
+standard lower/upper RF-frequency edges, populate editable bounds from the
+visible Plotly axes, and show in-view annotations as hoverable regions. The
+packaged exporter serializes the current buffer or full recording as JSON or MAT.
+If a workspace does not configure a capability, Sigvue omits its menu.
 
 ## Examples
 
@@ -59,7 +88,7 @@ menu.
 - **Acoustic Event Review** — navigate irregular markers and display waveform and spectrum products already stored in a JSON results file; the workspace performs no raw-audio processing.
 - **Radio Astronomy RFI Survey** — inspect real SigMF recordings from an Allen Telescope Array site survey with the same small, reusable windowed waterfall pipeline.
 - **LTE Recordings** — choose the 806 MHz downlink or 847 MHz uplink dataset and inspect a selected interval with the bundled example's average-spectrum and waterfall presentation.
-- **LFM Live View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface. Analysis stays at full slow-time, fast-time, and frequency resolution while a separate Raster rendering box controls only the browser image resolution and exact block statistic.
+- **LFM SigMF View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface. Analysis stays at full slow-time, fast-time, and frequency resolution while a separate Raster rendering box controls only the browser image resolution and exact block statistic.
 
 Every workspace is backed by files, but generated data is not committed.
 
@@ -69,6 +98,15 @@ box. Every source cell contributes to the displayed raster; analysis products an
 average PSD stay at full resolution. When pan or zoom settles, Sigvue requests a new
 raster of the visible source region so detail increases progressively without sending
 the full heatmap matrix to the browser.
+
+The generator and downloader scripts import the packaged plugin helpers. Before
+running any command below, install this repository in editable mode (after
+installing Sigvue):
+
+```bash
+python -m pip install -e ../sigvue
+python -m pip install -e .
+```
 
 To generate or download every example dataset in one command, including the
 roughly 3.4 GB radio-astronomy survey and the large LTE recordings, run:
@@ -106,11 +144,14 @@ Download the LTE downlink and uplink SigMF metadata and recordings from Daniel E
 [LTE data directory](http://nas.destevez.net/~daniel/LTE/) with:
 
 ```bash
-./scripts/generate_lte_sigmf.sh
+python scripts/download_lte_sigmf.py
 ```
 
-Pass a directory as the first argument to override the default `data` root. Each
-recording is placed in its workspace-specific subdirectory.
+Pass `--output /path/to/data` to override the default `data` root. The Python
+downloader uses Sigvue's framework-neutral atomic download helper to verify each file's
+expected size and SHA-256 digest, retries transient failures, and preserves
+existing SigMF metadata that may contain local annotations. Each recording is
+placed in its workspace-specific subdirectory.
 
 Download the six real SigMF archives from the
 [Quick RFI Survey at the Allen Telescope Array](https://zenodo.org/records/8242048)
@@ -131,7 +172,13 @@ redistributing or publishing results derived from it.
 
 ## Run
 
-Install the browser framework and this repository in one environment, then launch the included profile:
+Sigvue 2026.38 or newer supplies the public plugin contracts plus the
+framework-neutral configuration, formatting, and download utilities. This
+package supplies the concrete reusable plugin implementations used by the
+examples.
+
+Install the browser framework and this repository in one environment, then
+launch the included profile:
 
 ```bash
 python -m pip install -e ../sigvue
@@ -139,7 +186,10 @@ python -m pip install -e .
 sigvue --config browser.toml
 ```
 
-During development, installation of this repository is optional because `browser.toml` points directly at its root. The browser watches the repository and reloads changed workspace code when the page is refreshed.
+The browser itself can load this repository directly through `browser.toml`
+without an editable install and watches workspace code for changes. The
+generator and downloader scripts still require the editable install described
+above.
 
 All included workspaces set `lazy_views=True`, so only the selected tab and
 view-switcher branch is generated. A workspace that should perform its expensive

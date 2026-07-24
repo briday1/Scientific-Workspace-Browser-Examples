@@ -1,134 +1,21 @@
-"""Domain models and numerical processing for calibrated LFM radar data."""
+"""Numerical calibration and signal processing for LFM radar data."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from math import ceil, log10, pi, sqrt
-from pathlib import Path
+from math import ceil, pi, sqrt
 from typing import Any
 
 import numpy as np
 
-from sigvue.plugin import Annotation
+from .models import (
+    Calibration,
+    LfmAnalysisProducts,
+    LfmInput,
+    LfmSettings,
+    Products,
+)
 
 R_OHMS = 50.0
 THERMAL_NOISE_DBM_HZ = -174.0
-
-
-@dataclass(frozen=True)
-class CollectionMember:
-    role: str
-    channel: int
-    metadata_path: Path
-    data_path: Path
-    duration: float
-
-
-@dataclass(frozen=True)
-class LfmCollection:
-    sample_rate: float
-    calibration_dbm: float
-    adc_bits: int
-    members: dict[str, tuple[CollectionMember, ...]]
-    ota_prf_hz: float = 1_000.0
-    ota_pulse_width_seconds: float = 50e-6
-    collection_path: Path | None = None
-
-    def sample_count(self, role: str) -> int:
-        return min(member.data_path.stat().st_size // 4 for member in self.members[role])
-
-    def read(self, role: str, start: int = 0, count: int | None = None) -> np.ndarray:
-        available = self.sample_count(role)
-        start = min(available, max(0, start))
-        count = available - start if count is None else min(max(0, count), available - start)
-        channels = []
-        for member in self.members[role]:
-            with member.data_path.open("rb") as stream:
-                stream.seek(start * 4)
-                iq = np.fromfile(stream, dtype="<i2", count=count * 2).reshape(-1, 2)
-            channels.append(iq[:, 0].astype(np.float32) + 1j * iq[:, 1].astype(np.float32))
-        return np.asarray(channels, dtype=np.complex64)
-
-
-@dataclass(frozen=True)
-class LfmInput:
-    sample_rate: float
-    calibration_dbm: float
-    adc_bits: int
-    pri_samples: int
-    start_sample: int
-    calibration_counts: np.ndarray
-    noise_counts: np.ndarray
-    ota_counts: np.ndarray
-    annotations: tuple[Annotation, ...] = ()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-@dataclass(frozen=True)
-class Calibration:
-    phase_offsets: np.ndarray
-    volts_per_count: np.ndarray
-    amplitude_corrections: np.ndarray
-    reference_volts_per_count: float
-    phase_reference_channel: int
-    amplitude_reference_channel: int
-    amplitude_reference_label: str
-    noise_power_dbm: np.ndarray
-    noise_psd_dbm_hz: np.ndarray
-    noise_figure_db: np.ndarray
-    full_scale_dbm: np.ndarray
-
-
-@dataclass(frozen=True)
-class Products:
-    fast_time_us: np.ndarray
-    slow_time_s: np.ndarray
-    slow_time_edges_s: np.ndarray
-    frequencies_hz: np.ndarray
-    time_mean_dbm: np.ndarray
-    time_max_dbm: np.ndarray
-    time_waterfall_dbm: np.ndarray
-    psd_mean_dbm_hz: np.ndarray
-    psd_max_dbm_hz: np.ndarray
-    psd_waterfall_dbm_hz: np.ndarray
-
-
-@dataclass(frozen=True)
-class LfmSettings:
-    adc_bits: int
-    phase_reference: str
-    amplitude_reference: str
-    reference_noise_psd_dbm_hz: float
-
-
-@dataclass(frozen=True)
-class LfmAnalysisProducts:
-    data: LfmInput
-    settings: LfmSettings
-    calibration: Calibration
-    signal: Products
-    calibrated_tone: np.ndarray
-    calibrated_noise: np.ndarray
-    phase_rows: list[dict[str, object]]
-    amplitude_rows: list[dict[str, object]]
-    amplitude_summary: str
-    noise_rows: list[dict[str, object]]
-
-
 
 
 def process_lfm(data: LfmInput, settings: LfmSettings) -> LfmAnalysisProducts:

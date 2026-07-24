@@ -1,10 +1,9 @@
-"""Calibration configuration and radar analysis lifecycle."""
+"""Calibration configuration for the radar analysis function."""
 
-from sigvue.plugin import Analysis, ParameterContext
+from sigvue.plugin import ParameterContext
 
-from .domain import (
-    THERMAL_NOISE_DBM_HZ, LfmAnalysisProducts, LfmInput, LfmSettings, process_lfm,
-)
+from .models import LfmAnalysisProducts, LfmInput, LfmSettings
+from .processing import THERMAL_NOISE_DBM_HZ, process_lfm
 
 
 def configure_lfm(data: LfmInput, ui: ParameterContext) -> LfmSettings:
@@ -57,14 +56,19 @@ def configure_lfm(data: LfmInput, ui: ParameterContext) -> LfmSettings:
     )
 
 
-class LfmAnalysis(Analysis[LfmInput, LfmSettings, LfmAnalysisProducts]):
-    def configure(self, data: LfmInput, ui: ParameterContext) -> LfmSettings:
-        return configure_lfm(data, ui)
+def analyze_lfm(
+    data: LfmInput,
+    settings: LfmSettings | None,
+) -> LfmAnalysisProducts:
+    """Run the domain processor after enforcing configured calibration."""
+    if settings is None:
+        raise RuntimeError("LFM analysis requires configured settings")
+    return process_lfm(data, settings)
 
-    def process(self, data: LfmInput, settings: LfmSettings | None) -> LfmAnalysisProducts:
-        if settings is None:
-            raise RuntimeError("LFM analysis requires configured settings")
-        return process_lfm(data, settings)
 
-
-__all__ = ["LfmAnalysis", "LfmAnalysisProducts", "LfmSettings", "configure_lfm"]
+__all__ = [
+    "LfmAnalysisProducts",
+    "LfmSettings",
+    "analyze_lfm",
+    "configure_lfm",
+]

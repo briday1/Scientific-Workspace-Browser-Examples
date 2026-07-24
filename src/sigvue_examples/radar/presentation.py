@@ -1,10 +1,10 @@
 """UI orchestration for LFM radar analysis products."""
 
-from sigvue.plugin import Presentation, ViewContext
+from sigvue.helpers import format_bytes, resident_nbytes
+from sigvue.plugin import ViewContext
 
 from ..style import ORANGE, TEAL
-from ..memory import format_bytes
-from .domain import LfmAnalysisProducts
+from .models import LfmAnalysisProducts
 from .plots import (
     _amplitude_figure, _combined_frequency_figure, _combined_time_figure,
     _frequency_figure, _noise_figure, _phase_figure, _time_figure,
@@ -101,8 +101,8 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
     with ui.tab("Waterfall"):
         waterfall_views = {}
         channel_choices = (
+            ("All", None),
             *((f"Ch{channel + 1}", channel) for channel in range(products.time_waterfall_dbm.shape[0])),
-            ("Multi", None),
         )
         for channel_index, (channel_label, channel) in enumerate(channel_choices):
             time_view_key = f"waterfall-domain-{2 * channel_index}"
@@ -214,8 +214,11 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
                     key="noise-plot",
                 )
 
-    input_arrays = (data.calibration_counts, data.noise_counts, data.ota_counts)
-    resident_input_bytes = sum(array.nbytes for array in {id(value): value for value in input_arrays}.values())
+    resident_input_bytes = resident_nbytes(
+        data.calibration_counts,
+        data.noise_counts,
+        data.ota_counts,
+    )
     ui.stat("Channels delivered", f"{data.ota_counts.shape[0]:,}")
     ui.stat("Samples per channel", f"{data.ota_counts.shape[1]:,}")
     ui.stat("Complex samples delivered", f"{data.ota_counts.size:,}")
@@ -226,10 +229,3 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
     ui.stat("Waterfall rows", f"{products.slow_time_s.size:,}")
     ui.stat("Fast-time points", f"{products.fast_time_us.size:,}")
     ui.stat("Frequency points", f"{products.frequencies_hz.size:,}")
-
-
-class LfmPresentation(Presentation[LfmAnalysisProducts]):
-    """Framework presentation for calibrated LFM products."""
-
-    def present(self, results: LfmAnalysisProducts, ui: ViewContext) -> None:
-        present_lfm(results, ui)

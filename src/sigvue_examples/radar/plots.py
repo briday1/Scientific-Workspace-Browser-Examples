@@ -1,24 +1,78 @@
 """Pure Plotly figure builders for LFM radar analysis products."""
 
+from colorsys import hsv_to_rgb
+from dataclasses import dataclass, replace
+from math import ceil, sqrt
+
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from sigvue.plugin import Annotation, TraceStyle, add_viewport_heatmap
 
+from ..plugins import add_time_frequency_annotation_regions
 from ..style import ORANGE, heatmap_grid_color, style_plotly
-from .domain import (
-    R_OHMS, Calibration, LfmInput, Products, _averaged_psd, _db10, _single_psd,
+from .models import Calibration, LfmInput, Products
+from .processing import (
+    R_OHMS,
+    _averaged_psd,
+    _db10,
+    _single_psd,
 )
-from .layout import channel_grid
-from .style import hsv_channel_colors
 
 
-CHANNEL_COLORS = hsv_channel_colors(4)
+@dataclass(frozen=True)
+class ChannelGrid:
+    """A compact, near-square row-major grid for a channel collection."""
+
+    channel_count: int
+    rows: int
+    columns: int
+
+    def position(self, channel_index: int) -> tuple[int, int]:
+        if not 0 <= channel_index < self.channel_count:
+            raise IndexError(
+                f"Channel index {channel_index} is outside this grid"
+            )
+        row, column = divmod(channel_index, self.columns)
+        return row + 1, column + 1
 
 
-def _channel_colors(channel_count: int) -> tuple[str, ...]:
-    return hsv_channel_colors(channel_count)
+def channel_grid(channel_count: int) -> ChannelGrid:
+    """Return a near-square grid for a channel collection."""
+    if channel_count < 1:
+        raise ValueError("A channel grid requires at least one channel")
+    columns = ceil(sqrt(channel_count))
+    rows = ceil(channel_count / columns)
+    return ChannelGrid(channel_count, rows, columns)
+
+
+def channel_colors(
+    channel_count: int,
+    *,
+    saturation: float = 0.68,
+    value: float = 0.78,
+) -> tuple[str, ...]:
+    """Return one distinct HSV color for every channel in a collection."""
+    if (
+        isinstance(channel_count, bool)
+        or not isinstance(channel_count, int)
+        or channel_count < 1
+    ):
+        raise ValueError("Channel colors require at least one channel")
+    colors = []
+    for index in range(channel_count):
+        red, green, blue = hsv_to_rgb(
+            index / channel_count,
+            saturation,
+            value,
+        )
+        colors.append(
+            f"#{round(red * 255):02x}"
+            f"{round(green * 255):02x}"
+            f"{round(blue * 255):02x}"
+        )
+    return tuple(colors)
 
 
 def _downsample_xy(
@@ -34,11 +88,6 @@ def _downsample_xy(
     indexes = np.linspace(0, x_values.size - 1, max_points, dtype=np.int64)
     return x_values[indexes], y_values[indexes]
 
-
-def _rgba(color: str, alpha: float) -> str:
-    value = color.lstrip("#")
-    red, green, blue = (int(value[index : index + 2], 16) for index in (0, 2, 4))
-    return f"rgba({red},{green},{blue},{alpha:g})"
 
 def _legend_inside_top_temporal_plot(figure: go.Figure, theme: str) -> go.Figure:
     """Keep calibration legends inside the upper time-domain subplot."""
@@ -78,7 +127,7 @@ def _phase_figure(
         subset = subset[:, indexes]
         time_us = time_us[indexes]
     aligned = subset * np.exp(-1j * calibration.phase_offsets)[:, None]
-    colors = _channel_colors(subset.shape[0])
+    colors = channel_colors(subset.shape[0])
     for channel in range(subset.shape[0]):
         name = f"Channel {channel + 1}"
         line = {"color": colors[channel]}
@@ -110,7 +159,7 @@ def _amplitude_figure(
     )
     subset = channels[:, : min(4096, channels.shape[1])]
     time_us = np.arange(subset.shape[1]) / data.sample_rate * 1e6
-    colors = _channel_colors(subset.shape[0])
+    colors = channel_colors(subset.shape[0])
     for channel in range(subset.shape[0]):
         power = _db10((np.abs(subset[channel]) ** 2 / (2 * R_OHMS)) / 1e-3)
         frequency, psd = _single_psd(subset[channel], data.sample_rate)
@@ -146,7 +195,7 @@ def _noise_figure(
     )
     subset = channels[:, : min(4096, channels.shape[1])]
     time_us = np.arange(subset.shape[1]) / data.sample_rate * 1e6
-    colors = _channel_colors(subset.shape[0])
+    colors = channel_colors(subset.shape[0])
     for channel in range(subset.shape[0]):
         power = _db10((np.abs(subset[channel]) ** 2 / (2 * R_OHMS)) / 1e-3)
         frequency, psd = _averaged_psd(channels[channel], data.sample_rate)
@@ -231,7 +280,6 @@ def _waterfall_figure(
             row=row,
             col=col,
         )
-    displayed_slow_times = np.sort(np.asarray(products.slow_time_s, dtype=float))
     slow_time_edges = np.asarray(products.slow_time_edges_s, dtype=float)
     slow_time_start = float(slow_time_edges[0])
     slow_time_stop = float(slow_time_edges[-1])
@@ -243,77 +291,42 @@ def _waterfall_figure(
     else:
         x_start = float(displayed_x[0]) - 0.5
         x_stop = float(displayed_x[0]) + 0.5
-    if domain == "frequency" and show_annotations and annotation_style is not None and products.frequencies_hz.size:
+    if (
+        domain == "frequency"
+        and show_annotations
+        and annotation_style is not None
+        and products.frequencies_hz.size > 1
+    ):
         view_lower_hz = float(np.min(products.frequencies_hz))
         view_upper_hz = float(np.max(products.frequencies_hz))
         view_stop_seconds = window_start_seconds + slow_time_stop
-        polygon_x: list[float | None] = []
-        polygon_y: list[float | None] = []
-        hover_x: list[float] = []
-        hover_y: list[float] = []
-        hover_text: list[str] = []
-        for annotation in annotations:
-            annotation_stop = (
-                view_stop_seconds
-                if annotation.duration_seconds is None
-                else annotation.start_seconds + annotation.duration_seconds
+        relative_annotations = tuple(
+            replace(
+                annotation,
+                start_seconds=(
+                    annotation.start_seconds - window_start_seconds
+                ),
+                duration_seconds=(
+                    view_stop_seconds - annotation.start_seconds
+                    if annotation.duration_seconds is None
+                    else annotation.duration_seconds
+                ),
             )
-            lower_hz = annotation.frequency_lower_hz if annotation.frequency_lower_hz is not None else view_lower_hz
-            upper_hz = annotation.frequency_upper_hz if annotation.frequency_upper_hz is not None else view_upper_hz
-            if annotation_stop < window_start_seconds or annotation.start_seconds > view_stop_seconds:
-                continue
-            if upper_hz < view_lower_hz or lower_hz > view_upper_hz:
-                continue
-            x0, x1 = max(view_lower_hz, lower_hz), min(view_upper_hz, upper_hz)
-            exact_y0 = max(window_start_seconds, annotation.start_seconds) - window_start_seconds
-            exact_y1 = min(view_stop_seconds, annotation_stop) - window_start_seconds
-            first_bin = int(np.searchsorted(slow_time_edges, exact_y0, side="right") - 1)
-            last_bin = int(np.searchsorted(slow_time_edges, exact_y1, side="left") - 1)
-            first_bin = min(displayed_slow_times.size - 1, max(0, first_bin))
-            last_bin = min(displayed_slow_times.size - 1, max(first_bin, last_bin))
-            y0 = min(exact_y0, float(slow_time_edges[first_bin]))
-            y1 = max(exact_y1, float(slow_time_edges[last_bin + 1]))
-            description = annotation.comment or annotation.label or "Annotation"
-            hover = (
-                f"{description}<br>Time: {annotation.start_seconds:.9g}–{annotation_stop:.9g} s"
-                f"<br>Frequency: {lower_hz:.12g}–{upper_hz:.12g} Hz"
+            for annotation in annotations
+        )
+        for display_index, channel in enumerate(channels):
+            row, col = grid.position(display_index)
+            add_time_frequency_annotation_regions(
+                figure,
+                relative_annotations,
+                time_range=(slow_time_start, slow_time_stop),
+                frequency_range=(view_lower_hz, view_upper_hz),
+                color=annotation_style.color,
+                width=annotation_style.width,
+                opacity=annotation_style.opacity,
+                row=row,
+                col=col,
             )
-            polygon_x.extend((x0, x1, x1, x0, x0, None))
-            polygon_y.extend((y0, y0, y1, y1, y0, None))
-            hover_x.extend((x0, (x0 + x1) / 2, x1))
-            hover_y.extend(((y0 + y1) / 2,) * 3)
-            hover_text.extend((hover,) * 3)
-        if polygon_x:
-            for display_index, channel in enumerate(channels):
-                row, col = grid.position(display_index)
-                figure.add_trace(
-                    go.Scatter(
-                        x=polygon_x,
-                        y=polygon_y,
-                        mode="lines",
-                        line=annotation_style.line,
-                        fill="toself",
-                        fillcolor=_rgba(annotation_style.color, 0.12),
-                        hoverinfo="skip",
-                        showlegend=False,
-                    ),
-                    row=row,
-                    col=col,
-                )
-                figure.add_trace(
-                    go.Scatter(
-                        x=hover_x,
-                        y=hover_y,
-                        mode="markers",
-                        marker={"color": annotation_style.color, "opacity": 0.01, "size": 12},
-                        text=hover_text,
-                        hovertemplate="%{text}<extra></extra>",
-                        name="",
-                        showlegend=False,
-                    ),
-                    row=row,
-                    col=col,
-                )
     figure.update_yaxes(
         title_text="Relative slow time (s)",
         range=[slow_time_start, slow_time_stop],
@@ -498,7 +511,7 @@ def _combined_channel_figure(
 ) -> go.Figure:
     """Overlay channel results with shared post-calibration references."""
     figure = go.Figure()
-    for channel, color in enumerate(_channel_colors(values.shape[0])):
+    for channel, color in enumerate(channel_colors(values.shape[0])):
         channel_name = f"Channel {channel + 1}"
         plot_x, plot_y = _downsample_xy(x, values[channel], max_points)
         figure.add_trace(

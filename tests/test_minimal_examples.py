@@ -1,5 +1,8 @@
+import json
+import re
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 try:
     import tomllib
@@ -8,8 +11,13 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 import plotly.graph_objects as go
 
+from scripts.generate_comms import write_recording
+from scripts.generate_segmented_results import generate as generate_events
 from sigvue.profile import load_browser_profile
 from sigvue.web.application import create_app
+from sigvue_examples.events.workspace import (
+    create_workspace as create_events_workspace,
+)
 import sigvue_examples.style as style
 
 
@@ -17,14 +25,32 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MinimalExampleTests(unittest.TestCase):
+    @staticmethod
+    def dependency_names(requirements):
+        return {
+            re.split(r"[\s;<>=!~\[]", requirement, maxsplit=1)[0].lower()
+            for requirement in requirements
+        }
+
     def test_direct_runtime_dependencies_and_test_extra_are_declared(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
         dependencies = tuple(project["dependencies"])
-        for package in ("certifi", "numpy", "plotly", "scipy", "sigvue"):
-            self.assertTrue(any(value.startswith(package) for value in dependencies))
         self.assertEqual(
-            "sigvue>=2026.37",
+            {"certifi", "numpy", "plotly", "scipy", "sigvue"},
+            self.dependency_names(dependencies),
+        )
+        self.assertEqual(
+            "sigvue>=2026.38",
             next(value for value in dependencies if value.startswith("sigvue")),
+        )
+        extras = project["optional-dependencies"]
+        self.assertEqual(
+            {"pytest", "tomli"},
+            self.dependency_names(extras["test"]),
+        )
+        self.assertEqual(
+            {"build", "twine"},
+            self.dependency_names(extras["release"]),
         )
 
     def test_profile_loads_copyable_comms_and_waterfall_workspaces(self):
@@ -59,6 +85,38 @@ class MinimalExampleTests(unittest.TestCase):
                 [column["key"] for column in listing["columns"]],
                 workspace["id"],
             )
+
+    def test_event_workspace_default_matches_the_generated_data_location(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            generated = generate_events(
+                root
+                / "data"
+                / "acoustic-events-segmented"
+                / "acoustic-events.json"
+            )
+            workspace = create_events_workspace({"profile_dir": root})
+
+            self.assertEqual(generated.parent.resolve(), workspace.source.directory)
+            self.assertEqual(
+                ["Synthetic acoustic event results"],
+                [item.title for item in workspace.discover_items()],
+            )
+
+    def test_comms_generator_writes_sigmf_utc_datetime_with_z_suffix(self):
+        with TemporaryDirectory() as directory:
+            metadata_path, _ = write_recording(
+                Path(directory),
+                "QPSK",
+                4,
+                20260723,
+            )
+            timestamp = json.loads(
+                metadata_path.read_text(encoding="utf-8")
+            )["captures"][0]["core:datetime"]
+
+            self.assertTrue(timestamp.endswith("Z"))
+            self.assertNotIn("+00:00", timestamp)
 
     def test_shared_styles_keep_standard_grid_and_offer_quiet_heatmap_grid(self):
         figure = style.style_figure(go.Figure(), "light", "Example")

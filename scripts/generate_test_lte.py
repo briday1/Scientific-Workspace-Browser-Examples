@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
+
+from sigvue_examples.plugins.sigmf import write_sigmf_recording
 
 
 RECORDINGS = (
@@ -25,24 +26,23 @@ def generate(root: Path) -> tuple[Path, ...]:
         signal = 0.42 * np.exp(2j * np.pi * 2_100_000 * time)
         signal += 0.18 * np.exp(-2j * np.pi * 5_300_000 * time)
         signal += 0.025 * (rng.normal(size=count) + 1j * rng.normal(size=count))
-        iq = np.empty((count, 2), dtype="<i2")
-        iq[:, 0] = np.clip(np.rint(signal.real * 32767), -32768, 32767)
-        iq[:, 1] = np.clip(np.rint(signal.imag * 32767), -32768, 32767)
         destination = root / direction
-        destination.mkdir(parents=True, exist_ok=True)
-        data_path = destination / f"{name}.sigmf-data"
-        metadata_path = destination / f"{name}.sigmf-meta"
-        iq.tofile(data_path)
-        metadata_path.write_text(json.dumps({
-            "global": {
-                "core:datatype": "ci16_le",
-                "core:sample_rate": sample_rate,
-                "core:num_channels": 1,
-                "core:description": f"Compact deterministic LTE {direction} test fixture",
-            },
-            "captures": [{"core:sample_start": 0, "core:frequency": center_hz}],
-            "annotations": [],
-        }, indent=2) + "\n", encoding="utf-8")
+        metadata_path, data_path = write_sigmf_recording(
+            destination,
+            name,
+            signal,
+            sample_rate,
+            datatype="ci16_le",
+            description=(
+                f"Compact deterministic LTE {direction} test fixture"
+            ),
+            captures=(
+                {
+                    "core:sample_start": 0,
+                    "core:frequency": center_hz,
+                },
+            ),
+        )
         written.extend((metadata_path, data_path))
     return tuple(written)
 

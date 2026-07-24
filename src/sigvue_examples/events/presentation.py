@@ -1,9 +1,9 @@
 """UI presentation for stored acoustic-event products."""
 
-from sigvue.plugin import Presentation, ViewContext
+from sigvue.helpers import format_bytes
+from sigvue.plugin import ViewContext
 
 from ..style import style_figure
-from ..memory import format_bytes
 from .models import StoredEventResults
 from .plots import spectrum_figure, waveform_figure
 
@@ -26,8 +26,3 @@ def present(event: StoredEventResults, ui: ViewContext) -> None:
             ),
             key="spectrum",
         )
-
-
-class EventPresentation(Presentation[StoredEventResults]):
-    def present(self, event: StoredEventResults, ui: ViewContext) -> None:
-        present(event, ui)

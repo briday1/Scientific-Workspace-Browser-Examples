@@ -4,15 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import ssl
 import sys
-import tarfile
 from urllib.request import Request, urlopen
 
 import certifi
+from sigvue.helpers import RemoteFile, download_file, safe_extract_tar
 
 
 RECORD_ID = 8242048
@@ -21,58 +20,39 @@ CHUNK_BYTES = 1024 * 1024
 TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
-def record_files() -> list[dict[str, object]]:
+def record_files() -> list[RemoteFile]:
     request = Request(RECORD_API, headers={"User-Agent": "Sigvue-Examples/0.1"})
     with urlopen(request, context=TLS_CONTEXT) as response:
         payload = json.load(response)
-    return sorted((item for item in payload["files"] if str(item["key"]).endswith(".sigmf")), key=lambda item: item["key"])
+    return sorted(
+        (
+            RemoteFile(
+                url=str(item["links"]["self"]),
+                filename=str(item["key"]),
+                size=int(item["size"]),
+                checksum=str(item["checksum"]),
+            )
+            for item in payload["files"]
+            if str(item["key"]).endswith(".sigmf")
+        ),
+        key=lambda remote: remote.filename,
+    )
 
 
-def md5(path: Path) -> str:
-    digest = hashlib.md5(usedforsecurity=False)
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(CHUNK_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _progress(filename: str):
+    def report(received: int, total: int | None) -> None:
+        status = (
+            f"{received / total:6.1%}"
+            if total
+            else f"{received / 1_000_000:.1f} MB"
+        )
+        print(f"\r{filename}: {status}", end="", flush=True)
+
+    return report
 
 
-def download(file: dict[str, object], destination: Path) -> None:
-    expected = str(file["checksum"]).removeprefix("md5:")
-    if destination.is_file() and md5(destination) == expected:
-        print(f"Using verified {destination.name}")
-        return
-    temporary = destination.with_suffix(destination.suffix + ".part")
-    request = Request(str(file["links"]["self"]), headers={"User-Agent": "Sigvue-Examples/0.1"})
-    size = int(file["size"])
-    received = 0
-    with urlopen(request, context=TLS_CONTEXT) as response, temporary.open("wb") as output:
-        while chunk := response.read(CHUNK_BYTES):
-            output.write(chunk)
-            received += len(chunk)
-            print(f"\r{destination.name}: {received / size:6.1%}", end="", flush=True)
-    print()
-    if md5(temporary) != expected:
-        temporary.unlink(missing_ok=True)
-        raise RuntimeError(f"Checksum mismatch for {destination.name}")
-    temporary.replace(destination)
-
-
-def unpack(archive: Path, output: Path) -> None:
-    root = output.resolve()
-    with tarfile.open(archive) as bundle:
-        members = bundle.getmembers()
-        for member in members:
-            target = (output / member.name).resolve()
-            if root not in target.parents and target != root:
-                raise RuntimeError(f"Unsafe archive member: {member.name}")
-            if member.issym() or member.islnk():
-                raise RuntimeError(f"Archive links are not supported: {member.name}")
-        bundle.extractall(output, members=members)
-    print(f"Unpacked {archive.name}")
-
-
-def is_unpacked(file: dict[str, object], output: Path) -> bool:
-    directory = output / Path(str(file["key"])).stem
+def is_unpacked(remote: RemoteFile, output: Path) -> bool:
+    directory = output / Path(remote.filename).stem
     return directory.is_dir() and any(directory.rglob("*.sigmf-meta")) and any(directory.rglob("*.sigmf-data"))
 
 
@@ -86,21 +66,32 @@ def main() -> None:
 
     files = record_files()
     if args.list:
-        for file in files:
-            print(f"{file['key']}  {int(file['size']) / 1e6:.1f} MB  {file['checksum']}")
+        for remote in files:
+            print(
+                f"{remote.filename}  {remote.size / 1e6:.1f} MB  "
+                f"{remote.checksum}"
+            )
         return
     if args.first:
         files = files[:1]
-    total_gb = sum(int(file["size"]) for file in files) / 1e9
+    total_gb = sum(remote.size or 0 for remote in files) / 1e9
     args.output.mkdir(parents=True, exist_ok=True)
     print(f"Downloading {len(files)} SigMF archive(s), {total_gb:.2f} GB total, to {args.output.resolve()}")
-    for file in files:
-        if is_unpacked(file, args.output):
-            print(f"Using unpacked {file['key']}")
+    for remote in files:
+        if is_unpacked(remote, args.output):
+            print(f"Using unpacked {remote.filename}")
             continue
-        archive = args.output / str(file["key"])
-        download(file, archive)
-        unpack(archive, args.output)
+        archive = download_file(
+            remote,
+            args.output,
+            user_agent="Sigvue-Examples/0.2",
+            chunk_bytes=CHUNK_BYTES,
+            progress=_progress(remote.filename),
+            tls_context=TLS_CONTEXT,
+        )
+        print()
+        safe_extract_tar(archive, args.output)
+        print(f"Unpacked {archive.name}")
         if not args.keep_archives:
             archive.unlink()
 

@@ -6,9 +6,13 @@ import unittest
 import numpy as np
 from scipy.io import loadmat
 
+from sigvue_examples.plugins.sigmf import (
+    SigMFAnnotator,
+    SigMFExporter,
+    WaterfallSigMFAnnotator,
+    load_sigmf_recording,
+)
 from sigvue.plugin import AnnotationRequest, ExportRequest
-from sigvue_examples.io.sigmf.capabilities import SigMFAnnotator, SigMFExporter, WaterfallSigMFAnnotator
-from sigvue_examples.io.sigmf.recording import load_recording
 
 
 class SigMFCapabilityTests(unittest.TestCase):
@@ -21,7 +25,7 @@ class SigMFCapabilityTests(unittest.TestCase):
         }), encoding="utf-8")
         iq = np.column_stack((np.arange(8, dtype=np.int16), -np.arange(8, dtype=np.int16)))
         iq.astype("<i2").tofile(root / "capture.sigmf-data")
-        return load_recording(metadata_path)
+        return load_sigmf_recording(metadata_path)
 
     def test_annotation_uses_standard_sigmf_fields_and_is_rediscovered(self):
         with TemporaryDirectory() as directory:
@@ -38,7 +42,7 @@ class SigMFCapabilityTests(unittest.TestCase):
             self.assertEqual(3, entry["core:sample_count"])
             self.assertNotIn("core:label", entry)
             self.assertEqual("Interesting burst", entry["core:comment"])
-            self.assertEqual("Sigvue Examples", entry["core:generator"])
+            self.assertEqual("Sigvue", entry["core:generator"])
             self.assertEqual(created.identifier, entry["core:uuid"])
             self.assertIsNone(created.label)
             self.assertEqual((created,), annotator.discover(recording))

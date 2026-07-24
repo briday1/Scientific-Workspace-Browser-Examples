@@ -6,25 +6,31 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from sigvue.core.plugin import AnalysisContext
-from sigvue.plugin import ExportRequest
+from sigvue.plugin import Annotation, ExportRequest, TraceStyle
 from sigvue.rendering.dispatch import RenderKind, detect_render_kind
-from sigvue_examples.radar.domain import (
+from sigvue_examples.plugins import CallableAnalysis, CallablePresentation
+from sigvue_examples.radar.analysis import configure_lfm
+from sigvue_examples.radar.capabilities import LfmExporter
+from sigvue_examples.radar.delivery import BufferedDelivery, WholeFileDelivery
+from sigvue_examples.radar.models import (
     CollectionMember,
     LfmCollection,
     LfmInput,
+)
+from sigvue_examples.radar.plots import (
+    _linear_average_db,
+    _waterfall_figure,
+    channel_colors,
+    channel_grid,
+)
+from sigvue_examples.radar.presentation import COLORMAPS, present_lfm
+from sigvue_examples.radar.processing import (
     _calibrate,
     _products,
     process_lfm,
 )
-from sigvue_examples.radar.analysis import LfmAnalysis, configure_lfm
-from sigvue_examples.radar.capabilities import LfmExporter
-from sigvue_examples.radar.delivery import BufferedDelivery, WholeFileDelivery
-from sigvue_examples.radar.layout import channel_grid
-from sigvue_examples.radar.plots import CHANNEL_COLORS, _linear_average_db, _waterfall_figure
-from sigvue_examples.radar.presentation import COLORMAPS, LfmPresentation, present_lfm
-from sigvue_examples.radar.workspace import create_workspace as create_live_workspace
-from sigvue_examples.radar.sigmf_source import read_sigmf_collection
-from sigvue_examples.radar.sigmf_workspace import create_workspace as create_sigmf_workspace
+from sigvue_examples.radar.source import read_collection
+from sigvue_examples.radar.workspace import create_workspace
 
 
 def render_lfm(data: LfmInput, values: dict[str, str]) -> AnalysisContext:
@@ -40,11 +46,26 @@ def render_lfm(data: LfmInput, values: dict[str, str]) -> AnalysisContext:
 
 
 class RadarCollectionTests(unittest.TestCase):
-    def test_sigmf_workspace_reuses_shared_buffered_pipeline(self):
-        workspace = create_sigmf_workspace({"data_root": Path("missing")})
-        self.assertIsInstance(workspace.analysis, LfmAnalysis)
-        self.assertIsInstance(workspace.presentation, LfmPresentation)
+    def test_workspace_reuses_shared_buffered_pipeline(self):
+        workspace = create_workspace({"data_root": Path("missing")})
+        self.assertIsInstance(workspace.analysis, CallableAnalysis)
+        self.assertIsInstance(workspace.presentation, CallablePresentation)
         self.assertIsInstance(workspace.delivery, BufferedDelivery)
+        annotation_fields = {
+            field.name: field for field in workspace.annotator.fields
+        }
+        self.assertEqual(
+            "lfm_annotation_region_color",
+            workspace.annotator.timeline_color_control,
+        )
+        self.assertEqual(
+            "waterfall-domain-1",
+            annotation_fields["frequency_lower_hz"].plot_binding.view,
+        )
+        self.assertEqual(
+            "playback",
+            annotation_fields["start_seconds"].plot_binding.offset_source,
+        )
 
     def test_standard_sigmf_collection_adapter_maps_streams_to_lfm_roles(self):
         with TemporaryDirectory() as directory:
@@ -63,7 +84,7 @@ class RadarCollectionTests(unittest.TestCase):
                     })
             manifest = root / "raw_data.sigmf-collection"
             manifest.write_text(json.dumps({"collection": {"core:streams": streams}}), encoding="utf-8")
-            collection = read_sigmf_collection(manifest)
+            collection = read_collection(manifest)
             sample_count = collection.sample_count("ota")
 
         self.assertEqual(10_240_000.0, collection.sample_rate)
@@ -87,18 +108,51 @@ class RadarCollectionTests(unittest.TestCase):
         self.assertIsNotNone(figure.layout.xaxis16)
         self.assertIsNotNone(figure.layout.yaxis16)
 
-    def test_live_workspace_uses_shared_buffered_pipeline(self):
-        live = create_live_workspace({"data_root": Path("missing")})
-        self.assertIsInstance(live.analysis, LfmAnalysis)
-        self.assertIsInstance(live.presentation, LfmPresentation)
-        self.assertIsInstance(live.delivery, BufferedDelivery)
-        self.assertIn("10-mhz", live.metadata.tags)
-        annotation_fields = {field.name: field for field in live.annotator.fields}
-        self.assertEqual("lfm_annotation_region_color", live.annotator.timeline_color_control)
-        self.assertEqual("waterfall-domain-1", annotation_fields["frequency_lower_hz"].plot_binding.view)
-        self.assertEqual("playback", annotation_fields["start_seconds"].plot_binding.offset_source)
-        self.assertIn("2-mhz", live.metadata.tags)
-        self.assertIn("multi-target", live.metadata.tags)
+    def test_frequency_waterfall_uses_shared_vector_annotation_regions(self):
+        products = _products(
+            np.ones((1, 32), dtype=np.complex64),
+            rate=1_024.0,
+            pri=8,
+            start=0,
+        )
+        figure = _waterfall_figure(
+            products,
+            "frequency",
+            "light",
+            "Viridis",
+            (-100.0, 0.0),
+            annotations=(
+                Annotation(
+                    "region",
+                    1.005,
+                    0.01,
+                    comment="Target",
+                    frequency_lower_hz=-100.0,
+                    frequency_upper_hz=100.0,
+                ),
+            ),
+            window_start_seconds=1.0,
+            annotation_style=TraceStyle(
+                "solid",
+                "circle",
+                "#ffffff",
+                1.0,
+                0.6,
+            ),
+            selected_channel=0,
+        )
+        region = next(
+            trace for trace in figure.data
+            if trace.name == "Annotations"
+        )
+        self.assertEqual(
+            (-100.0, 100.0, 100.0, -100.0, -100.0, None),
+            tuple(region.x),
+        )
+        np.testing.assert_allclose(
+            (0.005, 0.005, 0.015, 0.015, 0.005),
+            tuple(region.y[:5]),
+        )
 
     def test_whole_file_delivery_has_only_processing_pri_and_returns_all_samples(self):
         with TemporaryDirectory() as directory:
@@ -349,7 +403,7 @@ class RadarCollectionTests(unittest.TestCase):
             next(control for control in inline if control.name == "reference_noise_psd_dbm_hz").label,
         )
 
-        self.assertEqual(4, len(set(CHANNEL_COLORS)))
+        self.assertEqual(16, len(set(channel_colors(16))))
         self.assertFalse(any(control.name.startswith("channel_") for control in changed.controls))
         style_controls = [control for control in changed.controls if control.group == "Plot styles"]
         self.assertEqual(20, len(style_controls))
@@ -389,7 +443,7 @@ class RadarCollectionTests(unittest.TestCase):
         self.assertEqual(("Domain", "Channel"), waterfall_switcher.props["labels"])
         self.assertEqual(("buttons", "dropdown"), waterfall_switcher.props["selectors"])
         self.assertEqual(
-            (("Fast-time power", "Frequency PSD"), ("Ch1", "Ch2", "Ch3", "Ch4", "Multi")),
+            (("Fast-time power", "Frequency PSD"), ("All", "Ch1", "Ch2", "Ch3", "Ch4")),
             waterfall_switcher.props["options"],
         )
         for trace in changed.figures["waterfall-domain-0"].data:
@@ -403,7 +457,7 @@ class RadarCollectionTests(unittest.TestCase):
             self.assertEqual((-180.0, -80.0), (trace.zmin, trace.zmax))
             self.assertEqual("#0d0887", trace.colorscale[0][1])
         self.assertEqual(
-            1,
+            4,
             sum(trace.name == "Selection surface" for trace in changed.figures["waterfall-domain-0"].data),
         )
 
@@ -429,7 +483,7 @@ class RadarCollectionTests(unittest.TestCase):
             self.assertEqual(1, len(heatmaps))
             self.assertEqual(1, len(list(figure.select_xaxes())))
             self.assertEqual(1, len(list(figure.select_yaxes())))
-            self.assertIn("Channel 2", figure.layout.title.text)
+            self.assertIn("Channel 1", figure.layout.title.text)
 
         for key in ("time-view-0", "frequency-view-0"):
             self.assert_axes_share_range(changed.figures[key], "x")
@@ -443,14 +497,17 @@ class RadarCollectionTests(unittest.TestCase):
         for key in ("time-view-1", "time-view-2", "frequency-view-1", "frequency-view-2"):
             self.assertEqual(6, len(changed.figures[key].data))
             self.assertEqual(1, len(list(changed.figures[key].select_xaxes())))
-            self.assertEqual(CHANNEL_COLORS[0], changed.figures[key].data[0].line.color)
+            self.assertEqual(
+                channel_colors(4)[0],
+                changed.figures[key].data[0].line.color,
+            )
             self.assertEqual("Full scale", changed.figures[key].data[-1].name)
             self.assertEqual(1, sum(trace.name == "Full scale" for trace in changed.figures[key].data))
         for key in ("time-view-1", "time-view-2"):
             self.assertEqual("Average noise power", changed.figures[key].data[-2].name)
         for key in ("frequency-view-1", "frequency-view-2"):
             self.assertEqual("Average noise PSD", changed.figures[key].data[-2].name)
-        for key in ("waterfall-domain-8", "waterfall-domain-9"):
+        for key in ("waterfall-domain-0", "waterfall-domain-1"):
             self.assert_axes_share_range(changed.figures[key], "x")
             self.assert_axes_share_range(changed.figures[key], "y")
             for axis in (*changed.figures[key].select_xaxes(), *changed.figures[key].select_yaxes()):
@@ -523,7 +580,32 @@ class RadarCollectionTests(unittest.TestCase):
                 iq[:, 0] = channel
                 iq[:, 1] = -channel
                 iq.tofile(path)
-                records.append(CollectionMember(role, channel, root / "unused.sigmf-meta", path, 1.0))
+                metadata_path = path.with_name(
+                    path.name.removesuffix(".sigmf-data") + ".sigmf-meta"
+                )
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "global": {
+                                "core:datatype": "ci16_le",
+                                "core:sample_rate": 1_000.0,
+                                "core:num_channels": 1,
+                            },
+                            "captures": [{"core:sample_start": 0}],
+                            "annotations": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                records.append(
+                    CollectionMember(
+                        role,
+                        channel,
+                        metadata_path,
+                        path,
+                        1.0,
+                    )
+                )
             members[role] = tuple(records)
         return LfmCollection(1_000.0, -20.0, 16, members)
 
