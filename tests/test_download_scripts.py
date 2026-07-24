@@ -20,6 +20,7 @@ class DownloadScriptTests(unittest.TestCase):
         self.assertIn("download_mit_bih_ecg.py", aggregate)
         self.assertIn("download_weather_radar.py", aggregate)
         self.assertIn("download_passive_acoustics.py", aggregate)
+        self.assertIn("download_earthquake_seismic.py", aggregate)
 
     def test_lte_manifest_downloads_each_verified_file_to_its_workspace(self):
         with TemporaryDirectory() as directory, patch.object(

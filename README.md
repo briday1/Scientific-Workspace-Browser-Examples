@@ -99,6 +99,7 @@ If a workspace does not configure a capability, Sigvue omits its menu.
 - **LFM SigMF View** — choose the original 10 MHz single-return collection or a 2 MHz collection with three delayed/Doppler-shifted returns; both use the same live-tail, historical-seek, and calibration interface. Analysis stays at full slow-time, fast-time, and frequency resolution while a separate Raster rendering box controls only the browser image resolution and exact block statistic.
 - **Weather Radar** — choose the TLX or FDR radar and step through 141 real NOAA NEXRAD Level III super-resolution base-reflectivity scans spanning a dense two-hour storm window using segmented previous/next time navigation. The plan-position display offers a visual eleven-option colormap picker—including the custom NEXRAD scale—alongside a native-gate distribution summary and exact product metadata.
 - **NOAA Passive Acoustics** — inspect two compact, labeled SanctSound MB01 blue-whale call clips from NOAA's public Passive Acoustic Data Archive using a progressive Portland spectrogram, waveform, average PSD, and source metadata.
+- **Earthquake Seismology** — explore calibrated vertical ground velocity from the 2018 magnitude-7.1 Anchorage earthquake at EarthScope station IU COLA using a waveform, progressive Portland spectrogram, average PSD, and instrument metadata.
 
 Every workspace is backed by files, but generated data is not committed.
 
@@ -143,6 +144,7 @@ combined—with:
 python scripts/download_mit_bih_ecg.py
 python scripts/download_weather_radar.py
 python scripts/download_passive_acoustics.py
+python scripts/download_earthquake_seismic.py
 ```
 
 The ECG downloader pins records 100, 101, 200, and 207 from the
@@ -168,6 +170,11 @@ The passive-acoustics downloader pins the official accelerated blue-whale
 A-call and B-call clips from NOAA's SanctSound MB01 deployment, verifies their
 sizes and SHA-256 checksums, retains the source WAV files, and creates ranged
 SigMF companions for the workspace. The pair is under 2 MB.
+
+The earthquake downloader retrieves a pinned 15-minute GeoCSV request from
+EarthScope's FDSN service, verifies it, converts native counts to ground
+velocity using the supplied instrument sensitivity, and retains the source
+response alongside its SigMF companion.
 
 The LFM SigMF workspace reads both field captures and generated calibrated
 collections from `data/lfm-sigmf`. Generate the four-channel 10 MHz, sixteen-channel

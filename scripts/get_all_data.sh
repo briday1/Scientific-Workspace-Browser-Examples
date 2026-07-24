@@ -35,6 +35,8 @@ run python "${repository_root}/scripts/download_weather_radar.py" \
     --output "${data_root}/weather-radar"
 run python "${repository_root}/scripts/download_passive_acoustics.py" \
     --output "${data_root}/passive-acoustics"
+run python "${repository_root}/scripts/download_earthquake_seismic.py" \
+    --output "${data_root}/earthquake-seismic"
 run python "${repository_root}/scripts/download_lte_sigmf.py" \
     --output "$data_root"
 run python "${repository_root}/scripts/download_radio_astronomy.py" \

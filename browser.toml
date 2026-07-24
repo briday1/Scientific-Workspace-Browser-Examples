@@ -96,3 +96,14 @@ category = "ocean acoustics"
 tags = ["NOAA", "SanctSound", "hydrophone", "blue whale", "real data"]
 [workspaces.config]
 data_root = "./data/passive-acoustics"
+
+[[workspaces]]
+use = "earthquake-seismic"
+path = "."
+id = "earthquake-seismic"
+name = "Earthquake Seismology"
+description = "EarthScope recording of the 2018 M7.1 Anchorage earthquake."
+category = "geophysics"
+tags = ["EarthScope", "earthquake", "seismology", "real data"]
+[workspaces.config]
+data_root = "./data/earthquake-seismic"

@@ -28,6 +28,7 @@ lfm-sigmf = "sigvue_examples.radar.workspace:create_workspace"
 mit-bih-ecg = "sigvue_examples.ecg.workspace:create_workspace"
 weather-radar = "sigvue_examples.weather_radar.workspace:create_workspace"
 noaa-passive-acoustics = "sigvue_examples.passive_acoustics.workspace:create_workspace"
+earthquake-seismic = "sigvue_examples.earthquake_seismic.workspace:create_workspace"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
