@@ -185,7 +185,7 @@ class NexradLevel3ReaderTests(unittest.TestCase):
             ),
         )
 
-    def test_ppi_uses_responsive_browser_height_and_keeps_axis_titles(self):
+    def test_ppi_is_progressive_and_uses_compact_map_legends(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "TLX_N0B_2024_05_20_03_10_54"
             path.write_bytes(synthetic_n0b())
@@ -200,10 +200,20 @@ class NexradLevel3ReaderTests(unittest.TestCase):
         )
 
         self.assertIsNone(figure.layout.height)
-        self.assertEqual("East of radar (km)", figure.layout.xaxis.title.text)
-        self.assertEqual("North of radar (km)", figure.layout.yaxis.title.text)
+        self.assertTrue(figure._sigvue_viewport_heatmap)
+        self.assertIsNone(figure.layout.xaxis.title.text)
+        self.assertIsNone(figure.layout.yaxis.title.text)
+        self.assertFalse(figure.layout.xaxis.showgrid)
+        self.assertFalse(figure.layout.yaxis.showgrid)
+        self.assertFalse(figure.layout.xaxis.showticklabels)
+        self.assertFalse(figure.layout.yaxis.showticklabels)
         self.assertEqual((-1.0, 1.0), tuple(figure.layout.xaxis.range))
         self.assertEqual((-1.0, 1.0), tuple(figure.layout.yaxis.range))
+        self.assertEqual(5, len(figure.layout.shapes))
+        self.assertEqual(
+            ["<b>N</b>", "<b>E</b>", "<b>1 km</b>"],
+            [annotation.text for annotation in figure.layout.annotations],
+        )
 
     def test_radial_byte_count_must_match_declared_gate_count(self):
         with TemporaryDirectory() as directory:

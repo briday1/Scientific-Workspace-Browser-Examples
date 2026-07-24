@@ -12,7 +12,7 @@ from .plots import (
 )
 
 
-COLORMAPS = ("Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo", "Blues", "Greens", "Hot", "Jet")
+COLORMAPS = ("Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo", "Portland", "Blues", "Greens", "Hot", "Jet")
 TIME_WATERFALL_LIMITS_DBM = (-100.0, -10.0)
 PSD_WATERFALL_LIMITS_DBM_HZ = (-180.0, -80.0)
 
@@ -42,7 +42,7 @@ def present_lfm(results: LfmAnalysisProducts, ui: ViewContext) -> None:
     waterfall_colormap = ui.colormap(
         "lfm_waterfall_colormap",
         label="Colormap",
-        default="Plasma",
+        default="Portland",
         options=COLORMAPS,
         group="Waterfall display",
     )

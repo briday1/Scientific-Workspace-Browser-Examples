@@ -159,12 +159,44 @@ def present(products: WeatherRadarProducts, ui: ViewContext) -> None:
     colormap = ui.colormap(
         "weather_radar_colormap",
         label="Colormap",
-        default="NEXRAD",
+        default="Portland",
         options=REFLECTIVITY_COLORMAPS,
         group="Plan-position display",
     )
+    render_east_pixels = int(
+        ui.select(
+            "weather_radar_render_east_pixels",
+            label="Render resolution E/W (pixels)",
+            default=256,
+            options=(128, 256, 512, 768),
+            group="Raster rendering details",
+        )
+    )
+    render_north_pixels = int(
+        ui.select(
+            "weather_radar_render_north_pixels",
+            label="Render resolution N/S (pixels)",
+            default=256,
+            options=(128, 256, 512, 768),
+            group="Raster rendering details",
+        )
+    )
+    ui.stat(
+        "PPI rendering",
+        (
+            f"{display_pixels:,} × {display_pixels:,} source → "
+            f"{render_east_pixels:,} E/W × {render_north_pixels:,} N/S raster · max"
+        ),
+    )
 
-    with ui.tab("Plan Position"):
+    with ui.tab("Plan Position", columns=(0.22, 0.78)):
+        with ui.group("column"):
+            ui.place_parameters(
+                "weather_radar_colormap",
+                "weather_radar_ppi_range_km",
+                "weather_radar_ppi_pixels",
+                label="PPI display",
+            )
         ui.plot(
             lambda: ppi_figure(
                 scan,
@@ -172,6 +204,9 @@ def present(products: WeatherRadarProducts, ui: ViewContext) -> None:
                 pixels=display_pixels,
                 colormap=colormap,
                 theme=ui.theme,
+                render_east_pixels=render_east_pixels,
+                render_north_pixels=render_north_pixels,
+                viewport=ui.plot_viewport("weather-radar-ppi"),
             ),
             key="weather-radar-ppi",
             axis_navigation="bounded",

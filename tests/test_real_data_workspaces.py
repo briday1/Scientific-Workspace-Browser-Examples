@@ -100,6 +100,7 @@ class RealDataWorkspaceTests(unittest.TestCase):
                     "weather_radar_colormap": "Viridis",
                 }
             )
+            histogram = opened.page.views[1].callback({})
             advanced = workspace.open_item_with_values(
                 resources[0].identifier,
                 {
@@ -118,7 +119,7 @@ class RealDataWorkspaceTests(unittest.TestCase):
         self.assertNotIn("weather_radar_radial_index", controls)
         colormap = controls["weather_radar_colormap"]
         self.assertEqual("colormap", colormap.control_type)
-        self.assertEqual("NEXRAD", colormap.default)
+        self.assertEqual("Portland", colormap.default)
         self.assertEqual("NEXRAD", colormap.options[0])
         self.assertEqual(11, len(colormap.options))
         self.assertEqual(11, len(colormap.option_previews))
@@ -135,7 +136,18 @@ class RealDataWorkspaceTests(unittest.TestCase):
         )
         self.assertEqual((256, 256), np.asarray(ppi.data[0].z).shape)
         self.assertEqual((-1.0, 1.0), tuple(ppi.layout.xaxis.range))
+        self.assertEqual((-32.25, 94.75), tuple(histogram.layout.xaxis.range))
+        self.assertEqual(0, histogram.layout.yaxis.range[0])
+        self.assertGreater(histogram.layout.yaxis.range[1], max(histogram.data[0].y))
+        self.assertFalse(histogram.layout.xaxis.autorange)
+        self.assertFalse(histogram.layout.yaxis.autorange)
         self.assertIn("Buffer memory", opened.page.statistics)
+        self.assertEqual(
+            "512 × 512 source → 256 E/W × 256 N/S raster · max",
+            opened.page.statistics["PPI rendering"],
+        )
+        self.assertIn("weather_radar_render_east_pixels", controls)
+        self.assertIn("weather_radar_render_north_pixels", controls)
 
 
 if __name__ == "__main__":

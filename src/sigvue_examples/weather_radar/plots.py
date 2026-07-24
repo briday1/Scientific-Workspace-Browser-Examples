@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import plotly.graph_objects as go
 from plotly import colors as plotly_colors
+from sigvue.plugin import add_viewport_heatmap
 
 from ..plugins.nexrad import FIRST_MEASURED_CODE, NexradLevel3Radial
 from ..style import COLORS, style_plotly
@@ -114,6 +115,9 @@ def ppi_figure(
     pixels: int,
     colormap: str,
     theme: str,
+    render_east_pixels: int = 256,
+    render_north_pixels: int = 256,
+    viewport: dict[str, object] | None = None,
 ) -> go.Figure:
     if colormap not in REFLECTIVITY_COLORMAPS:
         raise ValueError(f"Unknown reflectivity colormap: {colormap}")
@@ -122,21 +126,38 @@ def ppi_figure(
         maximum_range_km=maximum_range_km,
         pixels=pixels,
     )
-    figure = go.Figure(
-        go.Heatmap(
-            x=x,
-            y=y,
-            z=dbz,
-            zmin=-20,
-            zmax=75,
-            colorscale=(NEXRAD_COLORSCALE if colormap == "NEXRAD" else colormap),
-            colorbar={"title": "dBZ"},
-            hovertemplate=(
-                "East: %{x:.1f} km<br>North: %{y:.1f} km"
-                "<br>Reflectivity: %{z:.1f} dBZ<extra></extra>"
-            ),
-            zsmooth=False,
-        )
+    figure = go.Figure()
+    figure.update_xaxes(
+        range=[-maximum_range_km, maximum_range_km],
+        constrain="domain",
+    )
+    figure.update_yaxes(
+        range=[-maximum_range_km, maximum_range_km],
+        scaleanchor="x",
+        scaleratio=1,
+    )
+    add_viewport_heatmap(
+        figure,
+        viewport=viewport,
+        render_width=render_east_pixels,
+        render_height=render_north_pixels,
+        aggregation="max",
+        x=x,
+        y=y,
+        z=dbz,
+        zmin=-20,
+        zmax=75,
+        colorscale=(NEXRAD_COLORSCALE if colormap == "NEXRAD" else colormap),
+        colorbar={
+            "title": {"text": "Reflectivity<br>(dBZ)"},
+            "len": 0.72,
+            "thickness": 14,
+        },
+        hovertemplate=(
+            "East: %{x:.1f} km<br>North: %{y:.1f} km"
+            "<br>Reflectivity: %{z:.1f} dBZ<extra></extra>"
+        ),
+        zsmooth=False,
     )
     figure.add_trace(
         go.Scatter(
@@ -152,44 +173,91 @@ def ppi_figure(
             hovertemplate=f"{scan.header.radar_id}<extra></extra>",
         )
     )
-    figure.update_xaxes(
-        title_text="East of radar (km)",
-        range=[-maximum_range_km, maximum_range_km],
-        constrain="domain",
-    )
-    figure.update_yaxes(
-        title_text="North of radar (km)",
-        range=[-maximum_range_km, maximum_range_km],
-        scaleanchor="x",
-        scaleratio=1,
-    )
-    return style_plotly(
+    scale_km = max(1.0, round(maximum_range_km / 4.0))
+    scale_fraction = scale_km / (2.0 * maximum_range_km)
+    styled = style_plotly(
         figure,
         title=(
             f"{scan.header.radar_id} {scan.header.product_id} "
             f"base reflectivity · {scan.header.scan_time:%Y-%m-%d %H:%M:%S} UTC"
         ),
         theme=theme,
-        boxed_axes=True,
+        boxed_axes=False,
     )
+    ink = "#e7f1f3" if theme == "dark" else "#13212b"
+    legend_background = (
+        "rgba(16,37,45,0.76)" if theme == "dark" else "rgba(255,255,255,0.80)"
+    )
+    styled.update_xaxes(
+        title_text=None,
+        showgrid=False,
+        showline=False,
+        showticklabels=False,
+        ticks="",
+        zeroline=False,
+    )
+    styled.update_yaxes(
+        title_text=None,
+        showgrid=False,
+        showline=False,
+        showticklabels=False,
+        ticks="",
+        zeroline=False,
+    )
+    styled.update_layout(
+        hovermode="closest",
+        margin={"l": 18, "r": 76, "t": 52, "b": 18},
+        shapes=[
+            {"type": "line", "xref": "paper", "yref": "paper", "x0": 0.055, "x1": 0.055, "y0": 0.055, "y1": 0.12, "line": {"color": ink, "width": 2}},
+            {"type": "line", "xref": "paper", "yref": "paper", "x0": 0.055, "x1": 0.12, "y0": 0.055, "y1": 0.055, "line": {"color": ink, "width": 2}},
+            {"type": "path", "xref": "paper", "yref": "paper", "path": "M 0.055 0.13 L 0.048 0.117 L 0.062 0.117 Z", "line": {"color": ink, "width": 1}, "fillcolor": ink},
+            {"type": "path", "xref": "paper", "yref": "paper", "path": "M 0.13 0.055 L 0.117 0.048 L 0.117 0.062 Z", "line": {"color": ink, "width": 1}, "fillcolor": ink},
+            # A scale bar whose paper length corresponds to the full-view range.
+            {"type": "line", "xref": "paper", "yref": "paper", "x0": 0.68, "x1": 0.68 + scale_fraction, "y0": 0.07, "y1": 0.07, "line": {"color": ink, "width": 4}},
+        ],
+        annotations=[
+            {"xref": "paper", "yref": "paper", "x": 0.055, "y": 0.145, "text": "<b>N</b>", "showarrow": False, "font": {"color": ink, "size": 11}, "bgcolor": legend_background},
+            {"xref": "paper", "yref": "paper", "x": 0.145, "y": 0.055, "text": "<b>E</b>", "showarrow": False, "font": {"color": ink, "size": 11}, "bgcolor": legend_background},
+            {"xref": "paper", "yref": "paper", "x": 0.68 + scale_fraction / 2, "y": 0.085, "text": f"<b>{scale_km:g} km</b>", "showarrow": False, "font": {"color": ink, "size": 11}, "bgcolor": legend_background},
+        ],
+    )
+    return styled
 
 
 def histogram_figure(
     products: WeatherRadarProducts,
     theme: str,
 ) -> go.Figure:
+    increment = products.scan.header.value_increment_dbz
+    measured_min = products.scan.header.minimum_value_dbz
+    measured_max = measured_min + (255 - FIRST_MEASURED_CODE) * increment
+    maximum_count = (
+        int(np.max(products.histogram_counts))
+        if products.histogram_counts.size
+        else 0
+    )
+    count_upper = max(1, int(np.ceil(maximum_count * 1.08)))
     figure = go.Figure(
         go.Bar(
             x=products.histogram_dbz,
             y=products.histogram_counts,
-            width=products.scan.header.value_increment_dbz * 0.92,
+            width=increment * 0.92,
             marker={"color": COLORS[1]},
             hovertemplate="%{x:.1f} dBZ<br>%{y:,} gates<extra></extra>",
             name="Native gates",
         )
     )
-    figure.update_xaxes(title_text="Exact native reflectivity (dBZ)")
-    figure.update_yaxes(title_text="Gate count")
+    figure.update_xaxes(
+        title_text="Exact native reflectivity (dBZ)",
+        range=[measured_min - increment / 2, measured_max + increment / 2],
+        autorange=False,
+    )
+    figure.update_yaxes(
+        title_text="Gate count",
+        range=[0, count_upper],
+        autorange=False,
+        rangemode="tozero",
+    )
     return style_plotly(
         figure,
         title="Measured-gate reflectivity distribution",

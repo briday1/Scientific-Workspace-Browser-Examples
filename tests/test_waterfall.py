@@ -80,6 +80,7 @@ class CopyablePipelineTests(unittest.TestCase):
             controls = {control.name: control for control in opened.page.controls}
             self.assertEqual("select", controls["fft_size"].control_type)
             self.assertEqual("colormap", controls["colormap"].control_type)
+            self.assertEqual("Portland", controls["colormap"].default)
             self.assertEqual("Raster rendering", controls["render_width"].group)
             self.assertEqual("mean", controls["render_aggregation"].default)
             self.assertEqual("Annotations", controls["show_annotations"].group)

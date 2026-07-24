@@ -11,7 +11,7 @@ from .models import WaterfallProducts
 from .plots import waterfall_figure
 
 
-COLORMAPS = ("Plasma", "Viridis", "Cividis", "Inferno", "Magma", "Turbo")
+COLORMAPS = ("Plasma", "Viridis", "Cividis", "Inferno", "Magma", "Turbo", "Portland")
 
 
 def automatic_dbfs_ranges(
@@ -57,7 +57,7 @@ def _rounded_range(lower: float, upper: float) -> tuple[float, float]:
 def present(products: WaterfallProducts, ui: ViewContext) -> None:
     """Collect display controls and lay out the waterfall view."""
     colormap = ui.colormap(
-        "colormap", label="Waterfall colormap", default="Plasma",
+        "colormap", label="Waterfall colormap", default="Portland",
         options=COLORMAPS, group="Display",
     )
     automatic_waterfall, automatic_spectrum = automatic_dbfs_ranges(products)

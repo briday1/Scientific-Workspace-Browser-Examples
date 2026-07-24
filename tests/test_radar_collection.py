@@ -425,7 +425,7 @@ class RadarCollectionTests(unittest.TestCase):
         )
         self.assertTrue(all(control.placement == "details" for control in waterfall_controls))
         self.assertEqual(COLORMAPS, waterfall_controls[0].options)
-        self.assertEqual("Plasma", waterfall_controls[0].default)
+        self.assertEqual("Portland", waterfall_controls[0].default)
         self.assertEqual((-100.0, -10.0), waterfall_controls[1].default)
         self.assertEqual((-180.0, -80.0), waterfall_controls[2].default)
         raster_controls = [control for control in changed.controls if control.group == "Raster rendering"]
@@ -450,12 +450,12 @@ class RadarCollectionTests(unittest.TestCase):
             if trace.type != "heatmap":
                 continue
             self.assertEqual((-100.0, -10.0), (trace.zmin, trace.zmax))
-            self.assertEqual("#0d0887", trace.colorscale[0][1])
+            self.assertEqual("rgb(12,51,131)", trace.colorscale[0][1])
         for trace in changed.figures["waterfall-domain-1"].data:
             if trace.type != "heatmap":
                 continue
             self.assertEqual((-180.0, -80.0), (trace.zmin, trace.zmax))
-            self.assertEqual("#0d0887", trace.colorscale[0][1])
+            self.assertEqual("rgb(12,51,131)", trace.colorscale[0][1])
         self.assertEqual(
             4,
             sum(trace.name == "Selection surface" for trace in changed.figures["waterfall-domain-0"].data),
